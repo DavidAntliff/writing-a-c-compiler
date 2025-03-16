@@ -1,3 +1,5 @@
+mod lexer;
+
 use std::fs;
 use std::path::PathBuf;
 use clap::Parser;
@@ -11,6 +13,18 @@ struct Cli {
     /// Output filename
     #[arg(short, long, value_name = "FILE")]
     output: Option<PathBuf>,
+
+    /// Stop after lexing
+    #[arg(long)]
+    lex: bool,
+
+    /// Stop after parsing
+    #[arg(long)]
+    parse: bool,
+
+    /// Stop after codegen
+    #[arg(long)]
+    codegen: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,6 +37,20 @@ _main:\n\
     movl $0, %eax\n\
     ret\n\
 ";
+
+    // read the input file as a string into memory
+    let input = fs::read_to_string(&cli.input)
+        .unwrap_or_else(|_| {
+            eprintln!("Failed to read input file: {}", cli.input.display());
+            std::process::exit(1);
+        });
+
+    let lexed = lexer::lex(&input).unwrap_or_else(|_| {
+        eprintln!("Failed to lex input file: {}", cli.input.display());
+        std::process::exit(1);
+    });
+
+    dbg!(lexed);
 
     let output_filename = cli.output.unwrap_or_else(|| {
         cli.input.with_extension("s")
