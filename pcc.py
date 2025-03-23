@@ -41,7 +41,8 @@ def main():
             preprocessed_file.unlink(missing_ok=True)
 
     try:
-        assemble_and_link(assembly_file)
+        if not (args.lex or args.parse or args.codegen):
+            assemble_and_link(assembly_file)
     finally:
         if not args.asm and assembly_file is not None:
             assembly_file.unlink(missing_ok=True)

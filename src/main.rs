@@ -1,8 +1,8 @@
 mod lexer;
 
+use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
-use clap::Parser;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -39,22 +39,20 @@ _main:\n\
 ";
 
     // read the input file as a string into memory
-    let input = fs::read_to_string(&cli.input)
-        .unwrap_or_else(|_| {
-            eprintln!("Failed to read input file: {}", cli.input.display());
-            std::process::exit(1);
-        });
+    let input = fs::read_to_string(&cli.input).unwrap_or_else(|_| {
+        eprintln!("Failed to read input file: {}", cli.input.display());
+        std::process::exit(1);
+    });
 
-    let lexed = lexer::lex(&input).unwrap_or_else(|_| {
+    let lexed = lexer::lex(&input).unwrap_or_else(|e| {
         eprintln!("Failed to lex input file: {}", cli.input.display());
+        eprintln!("Error: {e:?}");
         std::process::exit(1);
     });
 
     dbg!(lexed);
 
-    let output_filename = cli.output.unwrap_or_else(|| {
-        cli.input.with_extension("s")
-    });
+    let output_filename = cli.output.unwrap_or_else(|| cli.input.with_extension("s"));
 
     if let Err(e) = fs::write(&output_filename, dummy) {
         eprintln!("Failed to write to file: {}", e);
