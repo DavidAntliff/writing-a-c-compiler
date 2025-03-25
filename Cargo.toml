@@ -6,7 +6,11 @@ edition = "2024"
 [dependencies]
 assert_matches = "1.5.0"
 clap = { version = "4.5.32", features = ["derive"] }
+thiserror = "1.0.69"
 
 [dependencies.winnow]
 version = "0.7.4"
 #features = ["debug"]
+
+[dev-dependencies]
+assert_matches = "1.5.0"

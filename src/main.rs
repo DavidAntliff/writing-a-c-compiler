@@ -1,4 +1,6 @@
+mod ast;
 mod lexer;
+mod parser;
 
 use clap::Parser;
 use std::fs;
@@ -50,7 +52,15 @@ _main:\n\
         std::process::exit(1);
     });
 
-    dbg!(lexed);
+    dbg!(&lexed);
+
+    let parsed = parser::parse(&lexed).unwrap_or_else(|e| {
+        eprintln!("Failed to parse input file: {}", cli.input.display());
+        eprintln!("Error: {e:?}");
+        std::process::exit(1);
+    });
+
+    dbg!(&parsed);
 
     let output_filename = cli.output.unwrap_or_else(|| cli.input.with_extension("s"));
 

@@ -1,19 +1,24 @@
+use thiserror::Error;
 use winnow::ascii::{alphanumeric0, digit1, multispace0};
 use winnow::combinator::{alt, not, repeat, terminated};
 use winnow::prelude::*;
 use winnow::stream::AsChar;
 use winnow::token::{one_of, take_while};
 
-#[derive(Debug, PartialEq)]
+pub(crate) type Constant = usize;
+pub(crate) type Identifier = String;
+
+#[derive(Debug, PartialEq, Error)]
+#[error("Lexer error: {message}")]
 pub(crate) struct LexerError {
     message: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum Token {
     Keyword(Keyword),
-    Identifier(String),
-    Constant(usize),
+    Identifier(Identifier),
+    Constant(Constant),
     OpenParen,
     CloseParen,
     OpenBrace,
@@ -21,7 +26,7 @@ pub(crate) enum Token {
     Semicolon,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum Keyword {
     Int,
     Void,
@@ -62,7 +67,7 @@ fn constant(input: &mut &str) -> winnow::Result<Token> {
         digit1,
         not(one_of(|c: char| c.is_alphanum() || c == '_')), // \b
     )
-    .parse_to::<usize>()
+    .parse_to::<Constant>()
     .map(Token::Constant)
     .parse_next(input)
 }
