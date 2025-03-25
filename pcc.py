@@ -88,7 +88,7 @@ def compile(filename: Path,
     logger.debug(f"Compiler command: {cmd}")
     result = subprocess.run(cmd, shell=True, capture_output=True)
     if result.returncode != 0:
-        logger.error(f"Compiler failed: {result.stderr.decode()}")
+        logger.error(f"Compile failed: {result.stderr.decode()}")
         raise RuntimeError("Compile failed")
 
     return target

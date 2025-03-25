@@ -1,9 +1,5 @@
-mod ast;
-mod lexer;
-mod parser;
-
 use clap::Parser;
-use std::fs;
+use pcc::do_the_thing;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -31,43 +27,5 @@ struct Cli {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-
-    let dummy = "\n\
-    .text\n\
-    .globl _main\n\
-_main:\n\
-    movl $0, %eax\n\
-    ret\n\
-";
-
-    // read the input file as a string into memory
-    let input = fs::read_to_string(&cli.input).unwrap_or_else(|_| {
-        eprintln!("Failed to read input file: {}", cli.input.display());
-        std::process::exit(1);
-    });
-
-    let lexed = lexer::lex(&input).unwrap_or_else(|e| {
-        eprintln!("Failed to lex input file: {}", cli.input.display());
-        eprintln!("Error: {e:?}");
-        std::process::exit(1);
-    });
-
-    dbg!(&lexed);
-
-    let parsed = parser::parse(&lexed).unwrap_or_else(|e| {
-        eprintln!("Failed to parse input file: {}", cli.input.display());
-        eprintln!("Error: {e:?}");
-        std::process::exit(1);
-    });
-
-    dbg!(&parsed);
-
-    let output_filename = cli.output.unwrap_or_else(|| cli.input.with_extension("s"));
-
-    if let Err(e) = fs::write(&output_filename, dummy) {
-        eprintln!("Failed to write to file: {}", e);
-        std::process::exit(1);
-    }
-
-    Ok(())
+    do_the_thing(cli.input, cli.output, cli.lex, cli.parse, cli.codegen)
 }
