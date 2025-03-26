@@ -5,6 +5,7 @@ Compiler Driver script
 import argparse
 from pathlib import Path
 import subprocess
+import sys
 
 import logging
 
@@ -85,11 +86,22 @@ def compile(filename: Path,
     if stop_after_codegen:
         cmd += " --codegen"
 
+    match logger.getEffectiveLevel():
+        case logging.DEBUG:
+            cmd += " --debug"
+        case logging.INFO:
+            cmd += " --verbose"
+        case _:
+            pass
+    
     logger.debug(f"Compiler command: {cmd}")
     result = subprocess.run(cmd, shell=True, capture_output=True)
     if result.returncode != 0:
         logger.error(f"Compile failed: {result.stderr.decode()}")
         raise RuntimeError("Compile failed")
+    else:
+        if logger.getEffectiveLevel() <= logging.INFO:
+            print(result.stderr.decode(), file=sys.stderr)
 
     return target
 

@@ -21,29 +21,34 @@ _main:\n\
 ";
 
     // read the input file as a string into memory
+    log::info!("Reading input file: {}", input_filename.display());
     let input = fs::read_to_string(&input_filename).unwrap_or_else(|_| {
         eprintln!("Failed to read input file: {}", input_filename.display());
         std::process::exit(1);
     });
 
+    log::info!("Lexing input file: {}", input_filename.display());
     let lexed = lexer::lex(&input).unwrap_or_else(|e| {
         eprintln!("Failed to lex input file: {}", input_filename.display());
         eprintln!("Error: {e:?}");
         std::process::exit(1);
     });
 
-    dbg!(&lexed);
+    log::debug!("Lexed input: {lexed:#?}");
+
     if stop_after_lex {
         return Ok(());
     }
 
+    log::info!("Parsing input file: {}", input_filename.display());
     let parsed = parser::parse(&lexed).unwrap_or_else(|e| {
         eprintln!("Failed to parse input file: {}", input_filename.display());
         eprintln!("Error: {e:?}");
         std::process::exit(1);
     });
 
-    dbg!(&parsed);
+    log::debug!("AST: {parsed:#?}");
+
     if stop_after_parse {
         return Ok(());
     }
@@ -55,6 +60,7 @@ _main:\n\
     }
 
     let output_filename = output_filename.unwrap_or_else(|| input_filename.with_extension("s"));
+    log::info!("Emitting output file: {}", output_filename.display());
 
     if let Err(e) = fs::write(&output_filename, dummy) {
         eprintln!("Failed to write to file: {}", e);
