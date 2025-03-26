@@ -4,6 +4,25 @@ mod parser;
 
 use std::fs;
 use std::path::PathBuf;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("I/O: {path}")]
+    Io {
+        source: std::io::Error,
+        path: PathBuf,
+    },
+
+    #[error(transparent)]
+    Lexer(#[from] lexer::LexerError),
+
+    #[error(transparent)]
+    Parser(#[from] parser::ParserError),
+
+    #[error("Compiler error: {0}")]
+    Custom(String),
+}
 
 pub fn do_the_thing(
     input_filename: PathBuf,
@@ -11,7 +30,7 @@ pub fn do_the_thing(
     stop_after_lex: bool,
     stop_after_parse: bool,
     stop_after_codegen: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Error> {
     let dummy = "\n\
     .text\n\
     .globl _main\n\
@@ -22,17 +41,13 @@ _main:\n\
 
     // read the input file as a string into memory
     log::info!("Reading input file: {}", input_filename.display());
-    let input = fs::read_to_string(&input_filename).unwrap_or_else(|_| {
-        eprintln!("Failed to read input file: {}", input_filename.display());
-        std::process::exit(1);
-    });
+    let input = fs::read_to_string(&input_filename).map_err(|e| Error::Io {
+        source: e,
+        path: input_filename.clone(),
+    })?;
 
     log::info!("Lexing input file: {}", input_filename.display());
-    let lexed = lexer::lex(&input).unwrap_or_else(|e| {
-        eprintln!("Failed to lex input file: {}", input_filename.display());
-        eprintln!("Error: {e:?}");
-        std::process::exit(1);
-    });
+    let lexed = lexer::lex(&input)?;
 
     log::debug!("Lexed input: {lexed:#?}");
 
@@ -41,11 +56,7 @@ _main:\n\
     }
 
     log::info!("Parsing input file: {}", input_filename.display());
-    let parsed = parser::parse(&lexed).unwrap_or_else(|e| {
-        eprintln!("Failed to parse input file: {}", input_filename.display());
-        eprintln!("Error: {e:?}");
-        std::process::exit(1);
-    });
+    let parsed = parser::parse(&lexed)?;
 
     log::debug!("AST: {parsed:#?}");
 
@@ -62,17 +73,17 @@ _main:\n\
     let output_filename = output_filename.unwrap_or_else(|| input_filename.with_extension("s"));
     log::info!("Emitting output file: {}", output_filename.display());
 
-    if let Err(e) = fs::write(&output_filename, dummy) {
-        eprintln!("Failed to write to file: {}", e);
-        std::process::exit(1);
-    }
+    fs::write(&output_filename, dummy).map_err(|e| Error::Io {
+        source: e,
+        path: output_filename.clone(),
+    })?;
 
     Ok(())
 }
 
 #[cfg(test)]
-fn lex_and_parse(input: &str) -> Result<ast::Program, parser::ParserError> {
-    parser::parse(&lexer::lex(input)?)
+fn lex_and_parse(input: &str) -> Result<ast::Program, Error> {
+    Ok(parser::parse(&lexer::lex(input)?)?)
 }
 
 #[cfg(test)]
@@ -91,13 +102,13 @@ mod tests {
         }
         "#;
         assert_eq!(
-            lex_and_parse(input),
-            Ok(Program {
+            lex_and_parse(input).unwrap(),
+            Program {
                 function: Function {
                     name: "main".to_string(),
                     body: Statement::Return(Expression::Constant(2)),
                 }
-            })
+            }
         );
     }
 

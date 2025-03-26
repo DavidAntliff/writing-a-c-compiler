@@ -10,7 +10,7 @@ pub(crate) type Identifier = String;
 
 #[derive(Debug, PartialEq, Error)]
 #[error("Lexer error: {message}")]
-pub(crate) struct LexerError {
+pub struct LexerError {
     message: String,
 }
 
@@ -35,7 +35,7 @@ pub(crate) enum Keyword {
 
 pub(crate) fn lex(input: &str) -> Result<Vec<Token>, LexerError> {
     tokens.parse(input).map_err(|e| LexerError {
-        message: format!("Lexer error: {}", e),
+        message: e.to_string(),
     })
 }
 

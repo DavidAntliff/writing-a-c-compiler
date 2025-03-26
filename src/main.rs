@@ -35,7 +35,7 @@ struct Cli {
     codegen: bool,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let default_level = match (cli.debug, cli.verbose, cli.quiet) {
@@ -46,5 +46,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     env_logger::Builder::from_env(Env::default().default_filter_or(default_level)).init();
 
-    do_the_thing(cli.input, cli.output, cli.lex, cli.parse, cli.codegen)
+    Ok(do_the_thing(
+        cli.input,
+        cli.output,
+        cli.lex,
+        cli.parse,
+        cli.codegen,
+    )?)
 }
