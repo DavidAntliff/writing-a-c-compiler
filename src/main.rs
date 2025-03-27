@@ -1,6 +1,6 @@
 use clap::Parser;
 use env_logger::Env;
-use pcc::do_the_thing;
+use pcc::{do_the_thing, Error};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -46,11 +46,15 @@ fn main() -> anyhow::Result<()> {
     };
     env_logger::Builder::from_env(Env::default().default_filter_or(default_level)).init();
 
-    Ok(do_the_thing(
-        cli.input,
-        cli.output,
-        cli.lex,
-        cli.parse,
-        cli.codegen,
-    )?)
+    match do_the_thing(cli.input, cli.output, cli.lex, cli.parse, cli.codegen) {
+        Ok(_) => Ok(()),
+        Err(Error::Parser(e)) => {
+            eprintln!("Parser error: {}", e);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    }
 }

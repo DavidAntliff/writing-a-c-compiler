@@ -12,13 +12,36 @@ pub struct ParserError {
     message: String,
 }
 
+impl ParserError {
+    // Avoiding `From` so winnow types don't become part of our public API
+    fn from_parse(
+        error: winnow::error::ParseError<TokenSlice<'_, Token>, winnow::error::ContextError>,
+    ) -> Self {
+        let context = error.inner().context();
+        let expected = context
+            .filter_map(|c| match c {
+                StrContext::Expected(e) => Some(e.to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let expected = expected.first().cloned().unwrap_or("unknown".to_string());
+
+        ParserError {
+            message: format!(
+                "Expected {}, found {:?}",
+                expected,
+                error.input()[error.offset()]
+            ),
+        }
+    }
+}
+
 type Tokens<'i> = TokenSlice<'i, Token>;
 
 pub(crate) fn parse(input: &[Token]) -> Result<Program, ParserError> {
     let tokens = Tokens::new(input);
-    let program = program.parse(tokens).map_err(|e| ParserError {
-        message: format!("{e:?}"),
-    })?;
+    let program = program.parse(tokens).map_err(ParserError::from_parse)?;
     Ok(program)
 }
 
