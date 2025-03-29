@@ -1,5 +1,5 @@
 use crate::ast::{Expression, Function, Program, Statement};
-use crate::lexer::{Keyword, Token};
+use crate::lexer::{Keyword, Token, TokenKind};
 use thiserror::Error;
 use winnow::error::{StrContext, StrContextValue};
 use winnow::prelude::*;
@@ -9,7 +9,10 @@ use winnow::token::{any, literal};
 #[derive(Debug, PartialEq, Error)]
 #[error("{message}")]
 pub struct ParserError {
-    message: String,
+    pub message: String, // TODO: remove?
+    pub expected: String,
+    pub found: String,
+    pub offset: usize,
 }
 
 impl ParserError {
@@ -27,17 +30,73 @@ impl ParserError {
 
         let expected = expected.first().cloned().unwrap_or("unknown".to_string());
 
+        let found = error
+            .input()
+            .get(error.offset())
+            .map(|t| format!("{:?}", t.kind))
+            .unwrap_or("EOF".into());
+
+        let offset = if error.input().is_empty() {
+            0
+        } else {
+            error
+                .input()
+                .get(error.offset())
+                .map(|e| e.span.start)
+                .unwrap_or(
+                    // Unexpected  EOF, so get the end of the last token's span
+                    error
+                        .input()
+                        .get(error.offset() - 1)
+                        .map(|e| e.span.end)
+                        .unwrap_or(0),
+                )
+        };
+
         ParserError {
-            message: format!(
-                "Expected {}, found {:?}",
-                expected,
-                error.input()[error.offset()]
-            ),
+            message: format!("Expected {}, found {:?}", expected, found,),
+            expected: expected.clone(),
+            found: found.clone(),
+            offset,
         }
     }
 }
 
 type Tokens<'i> = TokenSlice<'i, Token>;
+
+impl PartialEq<TokenKind> for Token {
+    fn eq(&self, other: &TokenKind) -> bool {
+        self.kind == *other
+    }
+}
+
+impl winnow::stream::ContainsToken<&'_ Token> for TokenKind {
+    #[inline(always)]
+    fn contains_token(&self, token: &'_ Token) -> bool {
+        *self == token.kind
+    }
+}
+
+impl winnow::stream::ContainsToken<&'_ Token> for &'_ [TokenKind] {
+    #[inline]
+    fn contains_token(&self, token: &'_ Token) -> bool {
+        self.iter().any(|t| *t == token.kind)
+    }
+}
+
+impl<const LEN: usize> winnow::stream::ContainsToken<&'_ Token> for &'_ [TokenKind; LEN] {
+    #[inline]
+    fn contains_token(&self, token: &'_ Token) -> bool {
+        self.iter().any(|t| *t == token.kind)
+    }
+}
+
+impl<const LEN: usize> winnow::stream::ContainsToken<&'_ Token> for [TokenKind; LEN] {
+    #[inline]
+    fn contains_token(&self, token: &'_ Token) -> bool {
+        self.iter().any(|t| *t == token.kind)
+    }
+}
 
 pub(crate) fn parse(input: &[Token]) -> Result<Program, ParserError> {
     let tokens = Tokens::new(input);
@@ -56,7 +115,7 @@ fn program(i: &mut Tokens<'_>) -> winnow::Result<Program> {
 }
 
 fn function(i: &mut Tokens<'_>) -> winnow::Result<Function> {
-    literal(Token::Keyword(Keyword::Int))
+    literal(TokenKind::Keyword(Keyword::Int))
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::Description(
             "keyword",
@@ -68,21 +127,21 @@ fn function(i: &mut Tokens<'_>) -> winnow::Result<Function> {
             "identifier",
         )))
         .parse_next(i)?;
-    literal(Token::OpenParen)
+    literal(TokenKind::OpenParen)
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::StringLiteral("(")))
         .parse_next(i)?;
-    literal(Token::Keyword(Keyword::Void))
+    literal(TokenKind::Keyword(Keyword::Void))
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::Description(
             "keyword",
         )))
         .parse_next(i)?;
-    literal(Token::CloseParen)
+    literal(TokenKind::CloseParen)
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::StringLiteral(")")))
         .parse_next(i)?;
-    literal(Token::OpenBrace)
+    literal(TokenKind::OpenBrace)
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::StringLiteral("{")))
         .parse_next(i)?;
@@ -92,7 +151,7 @@ fn function(i: &mut Tokens<'_>) -> winnow::Result<Function> {
             "statement",
         )))
         .parse_next(i)?;
-    literal(Token::CloseBrace)
+    literal(TokenKind::CloseBrace)
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::StringLiteral("}")))
         .parse_next(i)?;
@@ -100,7 +159,7 @@ fn function(i: &mut Tokens<'_>) -> winnow::Result<Function> {
 }
 
 fn statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
-    literal(Token::Keyword(Keyword::Return))
+    literal(TokenKind::Keyword(Keyword::Return))
         .context(StrContext::Label("statement"))
         .context(StrContext::Expected(StrContextValue::Description(
             "keyword",
@@ -112,7 +171,7 @@ fn statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
             "expression",
         )))
         .parse_next(i)?;
-    literal(Token::Semicolon)
+    literal(TokenKind::Semicolon)
         .context(StrContext::Label("statement"))
         .context(StrContext::Expected(StrContextValue::Description(
             "semicolon",
@@ -122,21 +181,31 @@ fn statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
 }
 
 fn exp(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
-    let exp = int.map(Expression::Constant).parse_next(i)?;
+    let exp = int
+        .context(StrContext::Label("expression"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "integer",
+        )))
+        .map(Expression::Constant)
+        .parse_next(i)?;
     Ok(exp)
 }
 
 fn identifier(i: &mut Tokens<'_>) -> winnow::Result<String> {
     let identifier = any
         .try_map(|t: &Token| {
-            if let Token::Identifier(ref id) = *t {
+            if let TokenKind::Identifier(ref id) = t.kind {
                 Ok(id.clone())
             } else {
                 Err(ParserError {
                     message: "Expected an identifier".to_string(),
+                    expected: "identifier".to_string(),
+                    found: format!("{:?}", t.kind),
+                    offset: t.span.start,
                 })
             }
         })
+        .context(StrContext::Label("identifier"))
         .parse_next(i)?;
     Ok(identifier)
 }
@@ -144,14 +213,18 @@ fn identifier(i: &mut Tokens<'_>) -> winnow::Result<String> {
 fn int(i: &mut Tokens<'_>) -> winnow::Result<usize> {
     let constant = any
         .try_map(|t: &Token| {
-            if let Token::Constant(c) = *t {
+            if let TokenKind::Constant(c) = t.kind {
                 Ok(c)
             } else {
                 Err(ParserError {
                     message: "Expected a constant".to_string(),
+                    expected: "constant".to_string(),
+                    found: format!("{:?}", t.kind),
+                    offset: t.span.start,
                 })
             }
         })
+        .context(StrContext::Label("int"))
         .parse_next(i)?;
     Ok(constant)
 }
@@ -169,9 +242,9 @@ mod tests {
         }
         "#;
         let tokens = lex(input).unwrap();
-        dbg!(&tokens);
+        //dbg!(&tokens);
         let mut tokens = crate::parser::Tokens::new(&tokens);
-        let program = crate::parser::program.parse_next(&mut tokens);
-        dbg!(&program);
+        let _program = crate::parser::program.parse_next(&mut tokens);
+        //dbg!(&program);
     }
 }

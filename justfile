@@ -9,5 +9,6 @@ driver-test:
 
 ch1-test:
     cargo build
+    cargo test
     book-tests/test_compiler ./pcc.py --chapter 1 --stage lex
     book-tests/test_compiler ./pcc.py --chapter 1 --stage parse

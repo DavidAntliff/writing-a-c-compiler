@@ -24,7 +24,18 @@ pub enum Error {
     Custom(String),
 }
 
+pub fn read_input(input_filename: PathBuf) -> Result<String, Error> {
+    // read the input file as a string into memory
+    log::info!("Reading input file: {}", input_filename.display());
+    let input = fs::read_to_string(&input_filename).map_err(|e| Error::Io {
+        source: e,
+        path: input_filename.clone(),
+    })?;
+    Ok(input)
+}
+
 pub fn do_the_thing(
+    input: &str,
     input_filename: PathBuf,
     output_filename: Option<PathBuf>,
     stop_after_lex: bool,
@@ -39,15 +50,8 @@ _main:\n\
     ret\n\
 ";
 
-    // read the input file as a string into memory
-    log::info!("Reading input file: {}", input_filename.display());
-    let input = fs::read_to_string(&input_filename).map_err(|e| Error::Io {
-        source: e,
-        path: input_filename.clone(),
-    })?;
-
     log::info!("Lexing input file: {}", input_filename.display());
-    let lexed = lexer::lex(&input)?;
+    let lexed = lexer::lex(input)?;
 
     log::debug!("Lexed input: {lexed:#?}");
 
@@ -91,6 +95,7 @@ mod tests {
     use super::*;
 
     use crate::ast::{Expression, Function, Program, Statement};
+    use crate::parser::ParserError;
     use assert_matches::assert_matches;
 
     #[test]
@@ -113,11 +118,59 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_incomplete() {
-        let input = r#"
-        int main(void) {
-            return"#;
-        assert_matches!(lex_and_parse(input), Err(_));
+    fn test_parse_error_incomplete_identifier() {
+        let input = r#"int "#;
+        assert_matches!(
+            lex_and_parse(input).unwrap_err(),
+            Error::Parser(ParserError {
+                message: _,
+                expected,
+                found,
+                offset
+            }) if expected == "identifier" && found == "EOF" && offset == 3
+        );
+    }
+
+    #[test]
+    fn test_parse_error_incomplete_keyword() {
+        let input = r#"int main("#;
+        assert_matches!(
+            lex_and_parse(input).unwrap_err(),
+            Error::Parser(ParserError {
+                message: _,
+                expected,
+                found,
+                offset
+            }) if expected == "keyword" && found == "EOF" && offset == 9
+        );
+    }
+
+    #[test]
+    fn test_parse_error_incomplete_integer() {
+        let input = r#"int main(void) { return"#;
+        assert_matches!(
+            lex_and_parse(input).unwrap_err(),
+            Error::Parser(ParserError {
+                message: _,
+                expected,
+                found,
+                offset
+            }) if expected == "integer" && found == "EOF" && offset == 23
+        );
+    }
+
+    #[test]
+    fn test_parse_error_switched_parens() {
+        let input = r#"int main )( { return 0; }"#;
+        assert_matches!(
+            lex_and_parse(input).unwrap_err(),
+            Error::Parser(ParserError {
+                message: _,
+                expected,
+                found,
+                offset
+            }) if expected == "`(`" && found == "CloseParen" && offset == 9
+        );
     }
 
     #[test]

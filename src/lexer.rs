@@ -4,6 +4,7 @@ use winnow::combinator::{alt, not, repeat, terminated};
 use winnow::prelude::*;
 use winnow::stream::AsChar;
 use winnow::token::{one_of, take_while};
+use winnow::LocatingSlice;
 
 pub(crate) type Constant = usize;
 pub(crate) type Identifier = String;
@@ -18,7 +19,13 @@ pub struct LexerError {
 //       can report errors with line and column numbers.
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) enum Token {
+pub(crate) struct Token {
+    pub(crate) kind: TokenKind,
+    pub(crate) span: std::ops::Range<usize>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum TokenKind {
     Keyword(Keyword),
     Identifier(Identifier),
     Constant(Constant),
@@ -37,21 +44,23 @@ pub(crate) enum Keyword {
 }
 
 pub(crate) fn lex(input: &str) -> Result<Vec<Token>, LexerError> {
+    let input = LocatingInput::new(input);
     tokens.parse(input).map_err(|e| LexerError {
         message: e.to_string(),
     })
 }
 
-fn tokens(input: &mut &str) -> winnow::Result<Vec<Token>> {
+type LocatingInput<'a> = LocatingSlice<&'a str>;
+
+fn tokens(input: &mut LocatingInput<'_>) -> winnow::Result<Vec<Token>> {
     let tokens = repeat(0.., token).parse_next(input);
     multispace0.parse_next(input)?;
     tokens
 }
 
-fn token(input: &mut &str) -> winnow::Result<Token> {
+fn token(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
     multispace0.parse_next(input)?;
     alt((
-        // keyword_parser,
         identifier,
         constant,
         open_paren,
@@ -64,38 +73,67 @@ fn token(input: &mut &str) -> winnow::Result<Token> {
 }
 
 // Parser for a single unsigned integer token:
-fn constant(input: &mut &str) -> winnow::Result<Token> {
+fn constant(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
     // Look ahead: the next character must not be a word character.
     terminated(
         digit1,
         not(one_of(|c: char| c.is_alphanum() || c == '_')), // \b
     )
     .parse_to::<Constant>()
-    .map(Token::Constant)
+    .with_span()
+    .map(|(constant, span)| Token {
+        kind: TokenKind::Constant(constant),
+        span,
+    })
     .parse_next(input)
 }
 
-fn open_paren(input: &mut &str) -> winnow::Result<Token> {
-    '('.map(|_| Token::OpenParen).parse_next(input)
+fn open_paren(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    '('.with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::OpenParen,
+            span,
+        })
+        .parse_next(input)
 }
 
-fn close_paren(input: &mut &str) -> winnow::Result<Token> {
-    ')'.map(|_| Token::CloseParen).parse_next(input)
+fn close_paren(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    ')'.with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::CloseParen,
+            span,
+        })
+        .parse_next(input)
 }
-fn open_brace(input: &mut &str) -> winnow::Result<Token> {
-    '{'.map(|_| Token::OpenBrace).parse_next(input)
+fn open_brace(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    '{'.with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::OpenBrace,
+            span,
+        })
+        .parse_next(input)
 }
 
-fn close_brace(input: &mut &str) -> winnow::Result<Token> {
-    '}'.map(|_| Token::CloseBrace).parse_next(input)
+fn close_brace(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    '}'.with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::CloseBrace,
+            span,
+        })
+        .parse_next(input)
 }
 
-fn semicolon(input: &mut &str) -> winnow::Result<Token> {
-    ';'.map(|_| Token::Semicolon).parse_next(input)
+fn semicolon(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    ';'.with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Semicolon,
+            span,
+        })
+        .parse_next(input)
 }
 
-fn identifier(input: &mut &str) -> winnow::Result<Token> {
-    let identifier = terminated(
+fn identifier(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    let (identifier, span) = terminated(
         (
             take_while(1, |c: char| c.is_alpha() || c == '_'),
             take_while(0.., |c: char| c.is_alphanum() || c == '_'),
@@ -104,13 +142,26 @@ fn identifier(input: &mut &str) -> winnow::Result<Token> {
             .take(),
         not(one_of(|c: char| c.is_alphanum() || c == '_')), // \b
     )
+    .with_span()
     .parse_next(input)?;
 
     match identifier {
-        "int" => Ok(Token::Keyword(Keyword::Int)),
-        "void" => Ok(Token::Keyword(Keyword::Void)),
-        "return" => Ok(Token::Keyword(Keyword::Return)),
-        _ => Ok(Token::Identifier(identifier.to_string())),
+        "int" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Int),
+            span,
+        }),
+        "void" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Void),
+            span,
+        }),
+        "return" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Return),
+            span,
+        }),
+        _ => Ok(Token {
+            kind: TokenKind::Identifier(identifier.to_string()),
+            span,
+        }),
     }
 }
 
@@ -118,87 +169,251 @@ fn identifier(input: &mut &str) -> winnow::Result<Token> {
 mod tests {
     use super::*;
     use winnow::error::ContextError;
-    use winnow::Partial;
 
     #[test]
     fn test_lex() {
-        assert_eq!(lex("123"), Ok(vec![Token::Constant(123)]));
+        assert_eq!(
+            lex("123"),
+            Ok(vec![Token {
+                kind: TokenKind::Constant(123),
+                span: 0..3
+            },])
+        );
         assert_eq!(
             lex("123()"),
             Ok(vec![
-                Token::Constant(123),
-                Token::OpenParen,
-                Token::CloseParen
+                Token {
+                    kind: TokenKind::Constant(123),
+                    span: 0..3
+                },
+                Token {
+                    kind: TokenKind::OpenParen,
+                    span: 3..4
+                },
+                Token {
+                    kind: TokenKind::CloseParen,
+                    span: 4..5
+                },
             ])
         );
         assert_eq!(
             lex("  123 \n  456 "),
-            Ok(vec![Token::Constant(123), Token::Constant(456)])
+            Ok(vec![
+                Token {
+                    kind: TokenKind::Constant(123),
+                    span: 2..5
+                },
+                Token {
+                    kind: TokenKind::Constant(456),
+                    span: 9..12
+                }
+            ])
         );
         assert_eq!(
             lex("(123)"),
             Ok(vec![
-                Token::OpenParen,
-                Token::Constant(123),
-                Token::CloseParen
+                Token {
+                    kind: TokenKind::OpenParen,
+                    span: 0..1
+                },
+                Token {
+                    kind: TokenKind::Constant(123),
+                    span: 1..4
+                },
+                Token {
+                    kind: TokenKind::CloseParen,
+                    span: 4..5
+                }
             ])
         );
         assert_eq!(
             lex("{123}"),
             Ok(vec![
-                Token::OpenBrace,
-                Token::Constant(123),
-                Token::CloseBrace
+                Token {
+                    kind: TokenKind::OpenBrace,
+                    span: 0..1
+                },
+                Token {
+                    kind: TokenKind::Constant(123),
+                    span: 1..4
+                },
+                Token {
+                    kind: TokenKind::CloseBrace,
+                    span: 4..5
+                },
             ])
         );
         assert_eq!(
             lex("\n;123  ;"),
             Ok(vec![
-                Token::Semicolon,
-                Token::Constant(123),
-                Token::Semicolon
+                Token {
+                    kind: TokenKind::Semicolon,
+                    span: 1..2
+                },
+                Token {
+                    kind: TokenKind::Constant(123),
+                    span: 2..5
+                },
+                Token {
+                    kind: TokenKind::Semicolon,
+                    span: 7..8
+                },
             ])
         );
         assert_eq!(
             lex("main(void)"),
             Ok(vec![
-                Token::Identifier("main".to_string()),
-                Token::OpenParen,
-                Token::Keyword(Keyword::Void),
-                Token::CloseParen
+                Token {
+                    kind: TokenKind::Identifier("main".to_string()),
+                    span: 0..4
+                },
+                Token {
+                    kind: TokenKind::OpenParen,
+                    span: 4..5
+                },
+                Token {
+                    kind: TokenKind::Keyword(Keyword::Void),
+                    span: 5..9
+                },
+                Token {
+                    kind: TokenKind::CloseParen,
+                    span: 9..10
+                },
             ])
         );
     }
 
     #[test]
     fn test_lex_constant() {
-        assert_eq!(constant.parse("0"), Ok(Token::Constant(0)));
-        assert_eq!(constant.parse("123"), Ok(Token::Constant(123)));
+        assert_eq!(
+            constant.parse(LocatingInput::new("0")),
+            Ok(Token {
+                kind: TokenKind::Constant(0),
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            constant.parse(LocatingInput::new("123")),
+            Ok(Token {
+                kind: TokenKind::Constant(123),
+                span: 0..3
+            })
+        );
     }
 
     #[test]
     fn test_lex_token() {
-        assert_eq!(token.parse("0"), Ok(Token::Constant(0)));
-        assert_eq!(token.parse("123"), Ok(Token::Constant(123)));
-        assert_eq!(token.parse("("), Ok(Token::OpenParen));
-        assert_eq!(token.parse(")"), Ok(Token::CloseParen));
-        assert_eq!(token.parse("{"), Ok(Token::OpenBrace));
-        assert_eq!(token.parse("}"), Ok(Token::CloseBrace));
-        assert_eq!(token.parse(";"), Ok(Token::Semicolon));
-        assert_eq!(token.parse("int"), Ok(Token::Keyword(Keyword::Int)));
-        assert_eq!(token.parse("void"), Ok(Token::Keyword(Keyword::Void)));
-        assert_eq!(token.parse("return"), Ok(Token::Keyword(Keyword::Return)));
-        assert_eq!(token.parse("a"), Ok(Token::Identifier("a".into())));
-        assert_eq!(token.parse("_"), Ok(Token::Identifier("_".into())));
-        assert_eq!(token.parse("a1"), Ok(Token::Identifier("a1".into())));
-        assert_eq!(token.parse("_1"), Ok(Token::Identifier("_1".into())));
-        assert_eq!(token.parse("a_"), Ok(Token::Identifier("a_".into())));
+        assert_eq!(
+            token.parse(LocatingInput::new("0")),
+            Ok(Token {
+                kind: TokenKind::Constant(0),
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("123")),
+            Ok(Token {
+                kind: TokenKind::Constant(123),
+                span: 0..3
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("(")),
+            Ok(Token {
+                kind: TokenKind::OpenParen,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new(")")),
+            Ok(Token {
+                kind: TokenKind::CloseParen,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("{")),
+            Ok(Token {
+                kind: TokenKind::OpenBrace,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("}")),
+            Ok(Token {
+                kind: TokenKind::CloseBrace,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new(";")),
+            Ok(Token {
+                kind: TokenKind::Semicolon,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("int")),
+            Ok(Token {
+                kind: TokenKind::Keyword(Keyword::Int),
+                span: 0..3
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("void")),
+            Ok(Token {
+                kind: TokenKind::Keyword(Keyword::Void),
+                span: 0..4
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("return")),
+            Ok(Token {
+                kind: TokenKind::Keyword(Keyword::Return),
+                span: 0..6
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("a")),
+            Ok(Token {
+                kind: TokenKind::Identifier("a".into()),
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("_")),
+            Ok(Token {
+                kind: TokenKind::Identifier("_".into()),
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("a1")),
+            Ok(Token {
+                kind: TokenKind::Identifier("a1".into()),
+                span: 0..2
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("_1")),
+            Ok(Token {
+                kind: TokenKind::Identifier("_1".into()),
+                span: 0..2
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("a_")),
+            Ok(Token {
+                kind: TokenKind::Identifier("a_".into()),
+                span: 0..2
+            })
+        );
     }
 
     #[test]
     fn test_lex_token_error() {
         assert_eq!(
-            token.parse_peek(&Partial::new("12_34")),
+            token.parse_peek(LocatingInput::new("12_34")),
             Err(ContextError::new())
         );
     }
@@ -208,46 +423,71 @@ mod tests {
         // As per book, '123abc' should raise an error because 123 is not followed by a word boundary,
         // but '123;bar' should not raise an error because 123 is followed by a semicolon, which
         // is a word boundary.
-        assert_eq!(
-            constant.parse_peek(&Partial::new("123;bar")),
-            Ok((";bar", Token::Constant(123)))
-        );
-        assert_eq!(
-            constant.parse_peek(&Partial::new("123 bar")),
-            Ok((" bar", Token::Constant(123)))
-        );
-        assert_eq!(
-            constant.parse_peek(&Partial::new("123(")),
-            Ok(("(", Token::Constant(123)))
-        );
-        assert_eq!(
-            constant.parse_peek(&Partial::new("123abc")),
-            Err(ContextError::new())
-        );
-        assert_eq!(
-            constant.parse_peek(&Partial::new("123_bc")),
-            Err(ContextError::new())
-        );
+        let (_, t) = constant.parse_peek(LocatingInput::new("123;abc")).unwrap();
+        assert_eq!(t.kind, TokenKind::Constant(123));
+
+        let (_, t) = constant.parse_peek(LocatingInput::new("123 bar")).unwrap();
+        assert_eq!(t.kind, TokenKind::Constant(123));
+
+        let (_, t) = constant.parse_peek(LocatingInput::new("123(")).unwrap();
+        assert_eq!(t.kind, TokenKind::Constant(123));
+
+        let e = constant
+            .parse_peek(LocatingInput::new("123abc"))
+            .unwrap_err();
+        assert_eq!(e, ContextError::new());
+
+        let e = constant
+            .parse_peek(LocatingInput::new("123_bc"))
+            .unwrap_err();
+        assert_eq!(e, ContextError::new());
     }
 
     #[test]
     fn test_basic_program() {
         let input = r#"
-            int main() {
-                return 0;
-            }
-        "#;
+int main() {
+    return 0;
+}
+"#;
 
         let expected = vec![
-            Token::Keyword(Keyword::Int),
-            Token::Identifier("main".to_string()),
-            Token::OpenParen,
-            Token::CloseParen,
-            Token::OpenBrace,
-            Token::Keyword(Keyword::Return),
-            Token::Constant(0),
-            Token::Semicolon,
-            Token::CloseBrace,
+            Token {
+                kind: TokenKind::Keyword(Keyword::Int),
+                span: 1..4,
+            },
+            Token {
+                kind: TokenKind::Identifier("main".to_string()),
+                span: 5..9,
+            },
+            Token {
+                kind: TokenKind::OpenParen,
+                span: 9..10,
+            },
+            Token {
+                kind: TokenKind::CloseParen,
+                span: 10..11,
+            },
+            Token {
+                kind: TokenKind::OpenBrace,
+                span: 12..13,
+            },
+            Token {
+                kind: TokenKind::Keyword(Keyword::Return),
+                span: 18..24,
+            },
+            Token {
+                kind: TokenKind::Constant(0),
+                span: 25..26,
+            },
+            Token {
+                kind: TokenKind::Semicolon,
+                span: 26..27,
+            },
+            Token {
+                kind: TokenKind::CloseBrace,
+                span: 28..29,
+            },
         ];
 
         assert_eq!(lex(input), Ok(expected));
