@@ -1,4 +1,15 @@
-use crate::ast::{Expression, Function, Program, Statement};
+//! Parser for the C language
+//!
+//! Grammar:
+//!   <program> ::= <function>
+//!   <function> ::= "int" <identifier> "(" "void" ")" "{" <statement> "}"
+//!   <statement> ::= "return" <exp> ";"
+//!   <exp> ::= <int>
+//!   <identifier> ::= ? An identifier token ?
+//!   <int> ::= ? A constant token ?
+//!
+
+use crate::ast_c::{Expression, Function, Program, Statement};
 use crate::lexer::{Keyword, Token, TokenKind};
 use thiserror::Error;
 use winnow::error::{StrContext, StrContextValue};

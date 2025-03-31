@@ -1,6 +1,8 @@
-mod ast;
+mod ast_c;
+mod ast_assembly;
 mod lexer;
 mod parser;
+mod codegen;
 
 use std::fs;
 use std::path::PathBuf;
@@ -19,6 +21,9 @@ pub enum Error {
 
     #[error(transparent)]
     Parser(#[from] parser::ParserError),
+
+    #[error(transparent)]
+    Codegen(#[from] codegen::CodegenError),
 
     #[error("Compiler error: {0}")]
     Custom(String),
@@ -42,13 +47,20 @@ pub fn do_the_thing(
     stop_after_parse: bool,
     stop_after_codegen: bool,
 ) -> Result<(), Error> {
-    let dummy = "\n\
+
+    let main_symbol = if cfg!(target_os = "macos") {
+        "_main"
+    } else {
+        "main"
+    };
+
+    let dummy = format!("\n\
     .text\n\
-    .globl _main\n\
-_main:\n\
+    .globl {main_symbol}\n\
+{main_symbol}:\n\
     movl $0, %eax\n\
     ret\n\
-";
+");
 
     log::info!("Lexing input file: {}", input_filename.display());
     let lexed = lexer::lex(input)?;
@@ -60,15 +72,18 @@ _main:\n\
     }
 
     log::info!("Parsing input file: {}", input_filename.display());
-    let parsed = parser::parse(&lexed)?;
+    let ast = parser::parse(&lexed)?;
 
-    log::debug!("AST: {parsed:#?}");
+    log::debug!("AST: {ast:#?}");
 
     if stop_after_parse {
         return Ok(());
     }
 
     // TODO: codegen
+    let assembly = codegen::parse(&ast)?;
+
+    log::debug!("Assembly: {assembly:#?}");
 
     if stop_after_codegen {
         return Ok(());
@@ -86,15 +101,20 @@ _main:\n\
 }
 
 #[cfg(test)]
-fn lex_and_parse(input: &str) -> Result<ast::Program, Error> {
+fn lex_and_parse(input: &str) -> Result<ast_c::Program, Error> {
     Ok(parser::parse(&lexer::lex(input)?)?)
+}
+
+#[cfg(test)]
+fn lex_parse_and_codegen(input: &str) -> Result<ast_assembly::Program, Error> {
+    Ok(codegen::parse(&parser::parse(&lexer::lex(input)?)?)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use crate::ast::{Expression, Function, Program, Statement};
+    use crate::ast_c::{Expression, Function, Program, Statement};
     use crate::parser::ParserError;
     use assert_matches::assert_matches;
 
@@ -182,4 +202,28 @@ mod tests {
         foo"#;
         assert_matches!(lex_and_parse(input), Err(_));
     }
+
+    #[test]
+    fn test_codegen() {
+        use ast_assembly::{Function, Program, Instruction, Identifier, Operand};
+        // Listing on page 4, AST on page 13
+        let input = r#"
+        int main(void) {
+            return 2;
+        }
+        "#;
+        assert_eq!(
+            lex_parse_and_codegen(input).unwrap(),
+            Program {
+                function_definition: Function {
+                    name: Identifier("main".to_string()),
+                    instructions: vec![
+                        Instruction::Mov { src: Operand::Imm(2), dst: Operand::Register },
+                        Instruction::Ret,
+                    ]
+                }
+            }
+        );
+    }
+
 }

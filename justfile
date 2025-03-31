@@ -12,3 +12,4 @@ ch1-test:
     cargo test
     book-tests/test_compiler ./pcc.py --chapter 1 --stage lex
     book-tests/test_compiler ./pcc.py --chapter 1 --stage parse
+    book-tests/test_compiler ./pcc.py --chapter 1 --stage codegen
