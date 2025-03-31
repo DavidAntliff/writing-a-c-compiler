@@ -35,15 +35,17 @@ fn write_out(assembly: ast_assembly::Program, writer: &mut BufWriter<File>) -> s
         symbol = assembly.function_definition.name.0
     );
 
-    writeln!(writer, ".text")?;
-    writeln!(writer, ".globl {}", main_symbol)?;
+    let indent = "	";
+
+    //writeln!(writer, "    .text")?;
+    writeln!(writer, "{indent}.globl\t{}", main_symbol)?;
     writeln!(writer, "{}:", main_symbol)?;
 
     for instruction in assembly.function_definition.instructions {
-        write!(writer, "    ")?;
+        write!(writer, "{indent}")?;
         match instruction {
             ast_assembly::Instruction::Mov { src, dst } => {
-                writeln!(writer, "movl {src}, {dst}")?;
+                writeln!(writer, "movl\t{src}, {dst}")?;
             }
             ast_assembly::Instruction::Ret => {
                 writeln!(writer, "ret")?;
@@ -52,7 +54,7 @@ fn write_out(assembly: ast_assembly::Program, writer: &mut BufWriter<File>) -> s
     }
 
     if cfg!(target_os = "linux") {
-        writeln!(writer, ".section .note.GNU-stack,\"\",@progbits")?;
+        writeln!(writer, "{indent}.section\t.note.GNU-stack,\"\",@progbits")?;
     }
 
     Ok(())

@@ -23,3 +23,11 @@ AT&T syntax puts the source before the destination, while Intel syntax puts the 
 
 The AT&T syntax also uses a `$` prefix for immediate values and a `%` prefix for registers.
 In Intel syntax, immediate values are written without a prefix.
+
+On Mac OS, the `main` symbol must be called `_main`.
+
+On Linux, the line `.section .note.GNU-stack,"",@progbits` is used to mark the stack as not requiring an
+executable stack, thereby allowing an executable stack to be disabled.
+
+
+

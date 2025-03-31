@@ -13,3 +13,8 @@ ch1-test:
     book-tests/test_compiler ./pcc.py --chapter 1 --stage lex
     book-tests/test_compiler ./pcc.py --chapter 1 --stage parse
     book-tests/test_compiler ./pcc.py --chapter 1 --stage codegen
+    book-tests/test_compiler ./pcc.py --chapter 1
+
+
+ch1-listing:
+    cargo build && ./pcc.py listing_1.1.c && ./listing_1.1 ; echo $?
