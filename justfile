@@ -1,4 +1,4 @@
-default: ch1 ch2
+default: ch2
 
 
 driver-test:
@@ -6,6 +6,8 @@ driver-test:
     python3 pcc.py driver/driver.c
     ./driver ; echo $?
 
+
+# test_compiler also tests previous chapters
 
 ch1:
     cargo build
