@@ -7,6 +7,8 @@
 //!   operand = Imm(int) | Register
 //!
 
+use std::fmt::{Display, Formatter};
+
 #[derive(Debug, PartialEq)]
 pub(crate) struct Program {
     pub(crate) function_definition: Function,
@@ -31,4 +33,13 @@ pub(crate) enum Instruction {
 pub(crate) enum Operand {
     Imm(usize),
     Register,
+}
+
+impl Display for Operand {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Operand::Imm(i) => write!(f, "${i}"),
+            Operand::Register => write!(f, "%eax"),
+        }
+    }
 }

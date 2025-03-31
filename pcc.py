@@ -9,14 +9,13 @@ import sys
 
 import logging
 
-
 logger = logging.getLogger(__name__)
 
 
 def main():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("-d", "--debug",   action="store_const", dest="loglevel", const=logging.DEBUG,
+    parser.add_argument("-d", "--debug", action="store_const", dest="loglevel", const=logging.DEBUG,
                         default=logging.WARNING, help="Show debug output")
     parser.add_argument("-v", "--verbose", action="store_const", dest="loglevel", const=logging.INFO,
                         help="Show more output")
@@ -69,14 +68,6 @@ def compile(filename: Path,
             stop_after_codegen: bool) -> Path:
     target = filename.with_suffix('.s')
     logger.debug(f"Compiling {target}")
-#     # For Mac, the main symbol must be "_main"
-#     target.write_text("""
-#     .text
-#     .globl _main
-# _main:
-#     movl $0, %eax
-#     ret
-# """, encoding="ascii")
 
     cmd = f"target/debug/pcc {filename} -o {target}"
     if stop_after_lex:
@@ -93,7 +84,7 @@ def compile(filename: Path,
             cmd += " --verbose"
         case _:
             pass
-    
+
     logger.debug(f"Compiler command: {cmd}")
     result = subprocess.run(cmd, shell=True, capture_output=True)
     if result.returncode != 0:

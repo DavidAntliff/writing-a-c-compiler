@@ -1,8 +1,9 @@
-mod ast_c;
 mod ast_assembly;
+mod ast_c;
+mod codegen;
+mod emitter;
 mod lexer;
 mod parser;
-mod codegen;
 
 use std::fs;
 use std::path::PathBuf;
@@ -24,6 +25,9 @@ pub enum Error {
 
     #[error(transparent)]
     Codegen(#[from] codegen::CodegenError),
+
+    #[error(transparent)]
+    Emitter(#[from] emitter::EmitterError),
 
     #[error("Compiler error: {0}")]
     Custom(String),
@@ -47,21 +51,6 @@ pub fn do_the_thing(
     stop_after_parse: bool,
     stop_after_codegen: bool,
 ) -> Result<(), Error> {
-
-    let main_symbol = if cfg!(target_os = "macos") {
-        "_main"
-    } else {
-        "main"
-    };
-
-    let dummy = format!("\n\
-    .text\n\
-    .globl {main_symbol}\n\
-{main_symbol}:\n\
-    movl $0, %eax\n\
-    ret\n\
-");
-
     log::info!("Lexing input file: {}", input_filename.display());
     let lexed = lexer::lex(input)?;
 
@@ -80,7 +69,6 @@ pub fn do_the_thing(
         return Ok(());
     }
 
-    // TODO: codegen
     let assembly = codegen::parse(&ast)?;
 
     log::debug!("Assembly: {assembly:#?}");
@@ -89,13 +77,10 @@ pub fn do_the_thing(
         return Ok(());
     }
 
-    let output_filename = output_filename.unwrap_or_else(|| input_filename.with_extension("s"));
-    log::info!("Emitting output file: {}", output_filename.display());
-
-    fs::write(&output_filename, dummy).map_err(|e| Error::Io {
-        source: e,
-        path: output_filename.clone(),
-    })?;
+    emitter::emit(
+        assembly,
+        output_filename.unwrap_or(input_filename.with_extension(".s")),
+    )?;
 
     Ok(())
 }
@@ -205,7 +190,7 @@ mod tests {
 
     #[test]
     fn test_codegen() {
-        use ast_assembly::{Function, Program, Instruction, Identifier, Operand};
+        use ast_assembly::{Function, Identifier, Instruction, Operand, Program};
         // Listing on page 4, AST on page 13
         let input = r#"
         int main(void) {
@@ -218,12 +203,14 @@ mod tests {
                 function_definition: Function {
                     name: Identifier("main".to_string()),
                     instructions: vec![
-                        Instruction::Mov { src: Operand::Imm(2), dst: Operand::Register },
+                        Instruction::Mov {
+                            src: Operand::Imm(2),
+                            dst: Operand::Register
+                        },
                         Instruction::Ret,
                     ]
                 }
             }
         );
     }
-
 }
