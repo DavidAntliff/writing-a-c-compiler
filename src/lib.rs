@@ -160,7 +160,7 @@ mod tests {
                 expected,
                 found,
                 offset
-            }) if expected == "integer" && found == "EOF" && offset == 23
+            }) if expected == "expression" && found == "EOF" && offset == 23
         );
     }
 
@@ -212,5 +212,23 @@ mod tests {
                 }
             }
         );
+    }
+
+    // Chapter 2
+    #[test]
+    fn test_invalid_decrement_constant() {
+        // Listing 2-3, Page 32
+        let input = r#"
+        int main(void) {
+            return --2;
+        }"#;
+        assert_matches!(
+            lex_and_parse(input).unwrap_err(),
+            Error::Parser(ParserError {
+                message: _,
+                expected,
+                found,
+                offset
+            }) if expected == "expression" && found == "Decrement" && offset == 45        );
     }
 }

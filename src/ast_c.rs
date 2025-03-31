@@ -4,7 +4,8 @@
 //!   program = Program(function_definition)
 //!   function_definition = Function(identifier name, statement body)
 //!   statement = Return(exp)
-//!   exp = Constant(int)
+//!   exp = Constant(int) | Unary(unary_operator, exp)
+//!   unary_operator = Complement | Negate
 //!
 
 use crate::lexer::Identifier;
@@ -28,4 +29,11 @@ pub(crate) enum Statement {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Expression {
     Constant(usize),
+    Unary(UnaryOperator, Box<Expression>),
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum UnaryOperator {
+    Complement,
+    Negate,
 }

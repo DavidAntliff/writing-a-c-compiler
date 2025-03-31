@@ -4,18 +4,20 @@
 //!   <program> ::= <function>
 //!   <function> ::= "int" <identifier> "(" "void" ")" "{" <statement> "}"
 //!   <statement> ::= "return" <exp> ";"
-//!   <exp> ::= <int>
+//!   <exp> ::= <int> | <unop> <exp> | "(" <exp> ")"
+//!   <unop> ::= "-" | "~"
 //!   <identifier> ::= ? An identifier token ?
 //!   <int> ::= ? A constant token ?
 //!
 
-use crate::ast_c::{Expression, Function, Program, Statement};
+use crate::ast_c::{Expression, Function, Program, Statement, UnaryOperator};
 use crate::lexer::{Keyword, Token, TokenKind};
 use thiserror::Error;
+use winnow::combinator::{fail, peek};
 use winnow::error::{StrContext, StrContextValue};
 use winnow::prelude::*;
 use winnow::stream::TokenSlice;
-use winnow::token::{any, literal};
+use winnow::token::{any, literal, take};
 
 #[derive(Debug, PartialEq, Error)]
 #[error("{message}")]
@@ -54,14 +56,17 @@ impl ParserError {
                 .input()
                 .get(error.offset())
                 .map(|e| e.span.start)
-                .unwrap_or(
-                    // Unexpected  EOF, so get the end of the last token's span
+                .unwrap_or_else(|| {
+                    if error.offset() == 0 {
+                        return 0;
+                    }
+                    // Unexpected EOF, so get the end of the last token's span
                     error
                         .input()
                         .get(error.offset() - 1)
                         .map(|e| e.span.end)
-                        .unwrap_or(0),
-                )
+                        .unwrap_or(0)
+                })
         };
 
         ParserError {
@@ -192,13 +197,24 @@ fn statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
 }
 
 fn exp(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
-    let exp = int
-        .context(StrContext::Label("expression"))
-        .context(StrContext::Expected(StrContextValue::Description(
-            "integer",
-        )))
-        .map(Expression::Constant)
-        .parse_next(i)?;
+    let next_token = peek(any).parse_next(i)?;
+
+    let exp = match next_token.kind {
+        TokenKind::Constant(_) => Expression::Constant(int.parse_next(i)?),
+        TokenKind::BitwiseComplement | TokenKind::Negation => {
+            let op = unop.parse_next(i)?;
+            let exp = exp.parse_next(i)?;
+            Expression::Unary(op, Box::new(exp))
+        }
+        TokenKind::OpenParen => {
+            take(1usize).parse_next(i)?;
+            let exp = exp.parse_next(i)?;
+            literal(TokenKind::CloseParen).parse_next(i)?;
+            exp
+        }
+        _ => fail.parse_next(i)?,
+    };
+
     Ok(exp)
 }
 
@@ -240,9 +256,30 @@ fn int(i: &mut Tokens<'_>) -> winnow::Result<usize> {
     Ok(constant)
 }
 
+fn unop(i: &mut Tokens<'_>) -> winnow::Result<UnaryOperator> {
+    let op = any
+        .try_map(|t: &Token| match t.kind {
+            TokenKind::BitwiseComplement => Ok(UnaryOperator::Complement),
+            TokenKind::Negation => Ok(UnaryOperator::Negate),
+            _ => Err(ParserError {
+                message: "Expected a unary operator".to_string(),
+                expected: "unary operator".to_string(),
+                found: format!("{:?}", t.kind),
+                offset: t.span.start,
+            }),
+        })
+        .context(StrContext::Label("unop"))
+        .parse_next(i)?;
+    Ok(op)
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::ast_c::{Expression, UnaryOperator};
     use crate::lexer::lex;
+    use crate::parser::{exp, Tokens};
+    use assert_matches::assert_matches;
+    use winnow::error::ParseError;
     use winnow::Parser;
 
     #[test]
@@ -257,5 +294,65 @@ mod tests {
         let mut tokens = crate::parser::Tokens::new(&tokens);
         let _program = crate::parser::program.parse_next(&mut tokens);
         //dbg!(&program);
+    }
+
+    #[test]
+    fn test_expression_constant() {
+        let input = r#"2"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let expression = exp.parse(tokens).unwrap();
+        assert_eq!(expression, Expression::Constant(2));
+    }
+
+    #[test]
+    fn test_expression_bitwise_complement() {
+        let input = r#"~2"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let expression = exp.parse(tokens).unwrap();
+        assert_eq!(
+            expression,
+            Expression::Unary(UnaryOperator::Complement, Box::new(Expression::Constant(2)))
+        );
+    }
+
+    #[test]
+    fn test_expression_negation() {
+        let input = r#"-3"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let expression = exp.parse(tokens).unwrap();
+        assert_eq!(
+            expression,
+            Expression::Unary(UnaryOperator::Negate, Box::new(Expression::Constant(3)))
+        );
+    }
+
+    #[test]
+    fn test_expression_complement_of_negation() {
+        let input = r#"~(-4)"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let expression = exp.parse(tokens).unwrap();
+        assert_eq!(
+            expression,
+            Expression::Unary(
+                UnaryOperator::Complement,
+                Box::new(Expression::Unary(
+                    UnaryOperator::Negate,
+                    Box::new(Expression::Constant(4))
+                ))
+            )
+        );
+    }
+
+    #[test]
+    fn test_expression_error() {
+        let input = r#";"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let error = exp.parse(tokens).unwrap_err();
+        assert_matches!(error, ParseError { .. });
     }
 }

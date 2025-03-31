@@ -34,6 +34,9 @@ pub(crate) enum TokenKind {
     OpenBrace,
     CloseBrace,
     Semicolon,
+    BitwiseComplement,
+    Negation,
+    Decrement,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -68,6 +71,9 @@ fn token(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
         open_brace,
         close_brace,
         semicolon,
+        bitwise_complement,
+        decrement,
+        negation,
     ))
     .parse_next(input)
 }
@@ -163,6 +169,33 @@ fn identifier(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
             span,
         }),
     }
+}
+
+fn bitwise_complement(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    '~'.with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::BitwiseComplement,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn negation(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    '-'.with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Negation,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn decrement(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "--".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Decrement,
+            span,
+        })
+        .parse_next(input)
 }
 
 #[cfg(test)]
@@ -405,6 +438,29 @@ mod tests {
             token.parse(LocatingInput::new("a_")),
             Ok(Token {
                 kind: TokenKind::Identifier("a_".into()),
+                span: 0..2
+            })
+        );
+
+        // chapter 2
+        assert_eq!(
+            token.parse(LocatingInput::new("~")),
+            Ok(Token {
+                kind: TokenKind::BitwiseComplement,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("-")),
+            Ok(Token {
+                kind: TokenKind::Negation,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("--")),
+            Ok(Token {
+                kind: TokenKind::Decrement,
                 span: 0..2
             })
         );

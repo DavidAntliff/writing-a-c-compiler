@@ -31,6 +31,7 @@ fn function_definition(function: &ast_c::Function) -> ast_assembly::Function {
                 });
                 instructions.push(Instruction::Ret);
             }
+            Expression::Unary(_, _) => unimplemented!(),
         },
     }
 
