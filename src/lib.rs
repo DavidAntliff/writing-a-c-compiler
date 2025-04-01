@@ -1,4 +1,4 @@
-mod ast_assembly;
+mod ast_asm;
 mod ast_c;
 mod codegen;
 mod emitter;
@@ -82,7 +82,8 @@ pub fn do_the_thing(
         return Ok(());
     }
 
-    let assembly = codegen::parse(&ast)?;
+    //let assembly = codegen::parse(&ast)?;
+    let assembly = codegen::parse(&tacky)?;
 
     log::debug!("Assembly: {assembly:#?}");
 
@@ -104,8 +105,12 @@ fn lex_and_parse(input: &str) -> Result<ast_c::Program, Error> {
 }
 
 #[cfg(test)]
-fn lex_parse_and_codegen(input: &str) -> Result<ast_assembly::Program, Error> {
-    Ok(codegen::parse(&parser::parse(&lexer::lex(input)?)?)?)
+fn lex_parse_and_codegen(input: &str) -> Result<ast_asm::Program, Error> {
+    let lexed = lexer::lex(input)?;
+    let ast = parser::parse(&lexed)?;
+    let tacky = tacky::parse(&ast)?;
+    let asm = codegen::parse(&tacky)?;
+    Ok(asm)
 }
 
 #[cfg(test)]
@@ -203,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_codegen() {
-        use ast_assembly::{Function, Identifier, Instruction, Operand, Program};
+        use ast_asm::{Function, Identifier, Instruction, Operand, Program};
         // Listing on page 4, AST on page 13
         let input = r#"
         int main(void) {
@@ -218,7 +223,7 @@ mod tests {
                     instructions: vec![
                         Instruction::Mov {
                             src: Operand::Imm(2),
-                            dst: Operand::Register
+                            dst: Operand::Reg(ast_asm::Reg::AX),
                         },
                         Instruction::Ret,
                     ]

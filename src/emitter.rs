@@ -1,4 +1,5 @@
-use crate::ast_assembly;
+use crate::ast_asm;
+use crate::ast_asm::Instruction;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -11,7 +12,7 @@ pub struct EmitterError {
 }
 
 pub(crate) fn emit(
-    assembly: ast_assembly::Program,
+    assembly: ast_asm::Program,
     output_filename: PathBuf,
 ) -> Result<(), EmitterError> {
     log::info!("Emitting output file: {}", output_filename.display());
@@ -28,7 +29,7 @@ pub(crate) fn emit(
     Ok(())
 }
 
-fn write_out(assembly: ast_assembly::Program, writer: &mut BufWriter<File>) -> std::io::Result<()> {
+fn write_out(assembly: ast_asm::Program, writer: &mut BufWriter<File>) -> std::io::Result<()> {
     let main_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
     let main_symbol = format!(
         "{main_prefix}{symbol}",
@@ -44,12 +45,14 @@ fn write_out(assembly: ast_assembly::Program, writer: &mut BufWriter<File>) -> s
     for instruction in assembly.function_definition.instructions {
         write!(writer, "{indent}")?;
         match instruction {
-            ast_assembly::Instruction::Mov { src, dst } => {
+            Instruction::Mov { src, dst } => {
                 writeln!(writer, "movl\t{src}, {dst}")?;
             }
-            ast_assembly::Instruction::Ret => {
+            Instruction::Ret => {
                 writeln!(writer, "ret")?;
             }
+            Instruction::Unary { .. } => unimplemented!(),
+            Instruction::AllocateStack(_) => unimplemented!(),
         }
     }
 

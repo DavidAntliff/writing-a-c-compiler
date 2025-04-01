@@ -291,7 +291,7 @@ mod tests {
         "#;
         let tokens = lex(input).unwrap();
         //dbg!(&tokens);
-        let mut tokens = crate::parser::Tokens::new(&tokens);
+        let mut tokens = Tokens::new(&tokens);
         let _program = crate::parser::program.parse_next(&mut tokens);
         //dbg!(&program);
     }

@@ -59,13 +59,6 @@ pub(crate) fn parse(program: &ast_c::Program) -> Result<Program, TackyError> {
     let mut body = vec![];
     let mut temporary = TemporaryNamer::new();
 
-    // match &program.function.body {
-    //     ast_c::Statement::Return(exp) => {
-    //         let val = emit_tacky(exp.clone(), &mut body, &mut temporary);
-    //         body.push(Instruction::Return(val));
-    //     }
-    // }
-
     let val = emit_statement(&program.function.body, &mut body, &mut temporary);
     body.push(val);
 
@@ -247,7 +240,7 @@ mod tests {
                 op: UnaryOperator::Negate,
                 src: Val::Constant(2),
                 dst: Val::Var("tmp.0".into()),
-            },]
+            }]
         );
     }
 
