@@ -31,6 +31,10 @@ struct Cli {
     #[arg(long)]
     parse: bool,
 
+    /// Stop after tacky generation
+    #[arg(long)]
+    tacky: bool,
+
     /// Stop after codegen
     #[arg(long)]
     codegen: bool,
@@ -58,6 +62,7 @@ fn main() -> anyhow::Result<()> {
         cli.output,
         cli.lex,
         cli.parse,
+        cli.tacky,
         cli.codegen,
     ) {
         Ok(_) => Ok(()),

@@ -4,6 +4,7 @@ mod codegen;
 mod emitter;
 mod lexer;
 mod parser;
+mod tacky;
 
 use std::fs;
 use std::path::PathBuf;
@@ -22,6 +23,9 @@ pub enum Error {
 
     #[error(transparent)]
     Parser(#[from] parser::ParserError),
+
+    #[error(transparent)]
+    Tacky(#[from] tacky::TackyError),
 
     #[error(transparent)]
     Codegen(#[from] codegen::CodegenError),
@@ -49,6 +53,7 @@ pub fn do_the_thing(
     output_filename: Option<PathBuf>,
     stop_after_lex: bool,
     stop_after_parse: bool,
+    stop_after_tacky: bool,
     stop_after_codegen: bool,
 ) -> Result<(), Error> {
     log::info!("Lexing input file: {}", input_filename.display());
@@ -66,6 +71,14 @@ pub fn do_the_thing(
     log::debug!("AST: {ast:#?}");
 
     if stop_after_parse {
+        return Ok(());
+    }
+
+    let tacky = tacky::parse(&ast)?;
+
+    log::debug!("TACKY: {tacky:#?}");
+
+    if stop_after_tacky {
         return Ok(());
     }
 

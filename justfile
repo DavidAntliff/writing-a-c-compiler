@@ -29,3 +29,4 @@ ch2:
     cargo build
     book-tests/test_compiler ./pcc.py --chapter 2 --stage lex
     book-tests/test_compiler ./pcc.py --chapter 2 --stage parse
+    book-tests/test_compiler ./pcc.py --chapter 2 --stage tacky

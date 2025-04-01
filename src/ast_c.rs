@@ -26,13 +26,13 @@ pub(crate) enum Statement {
     Return(Expression),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Expression {
     Constant(usize),
     Unary(UnaryOperator, Box<Expression>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum UnaryOperator {
     Complement,
     Negate,
