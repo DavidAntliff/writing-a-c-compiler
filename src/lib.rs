@@ -221,6 +221,7 @@ mod tests {
                 function_definition: Function {
                     name: Identifier("main".to_string()),
                     instructions: vec![
+                        Instruction::AllocateStack(0),
                         Instruction::Mov {
                             src: Operand::Imm(2),
                             dst: Operand::Reg(ast_asm::Reg::AX),

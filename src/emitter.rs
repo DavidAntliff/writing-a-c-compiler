@@ -36,23 +36,33 @@ fn write_out(assembly: ast_asm::Program, writer: &mut BufWriter<File>) -> std::i
         symbol = assembly.function_definition.name.0
     );
 
-    let indent = "	";
+    let indent = "\t";
 
     //writeln!(writer, "    .text")?;
     writeln!(writer, "{indent}.globl\t{}", main_symbol)?;
     writeln!(writer, "{}:", main_symbol)?;
 
+    // Allocate stack
+    writeln!(writer, "{indent}pushq\t%rbp")?;
+    writeln!(writer, "{indent}movq\t%rsp, %rbp")?;
+
     for instruction in assembly.function_definition.instructions {
-        write!(writer, "{indent}")?;
+        write!(writer, "")?;
         match instruction {
             Instruction::Mov { src, dst } => {
-                writeln!(writer, "movl\t{src}, {dst}")?;
+                writeln!(writer, "{indent}movl\t{src}, {dst}")?;
             }
             Instruction::Ret => {
-                writeln!(writer, "ret")?;
+                writeln!(writer, "{indent}movq\t%rbp, %rsp")?;
+                writeln!(writer, "{indent}popq\t%rbp")?;
+                writeln!(writer, "{indent}ret")?;
             }
-            Instruction::Unary { .. } => unimplemented!(),
-            Instruction::AllocateStack(_) => unimplemented!(),
+            Instruction::Unary { op, dst } => {
+                writeln!(writer, "{indent}{op}\t{dst}")?;
+            }
+            Instruction::AllocateStack(n) => {
+                writeln!(writer, "{indent}subq\t${n}, %rsp")?;
+            }
         }
     }
 

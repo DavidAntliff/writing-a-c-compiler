@@ -1,4 +1,5 @@
 use crate::ast_asm as asm;
+use crate::ast_asm::Reg;
 use crate::tacky;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -8,6 +9,9 @@ use thiserror::Error;
 pub struct CodegenError {
     pub message: String,
 }
+
+// Register used to move values between stack locations
+const MOV_SCRATCH_REGISTER: Reg = Reg::R10;
 
 pub(crate) fn parse(tacky: &tacky::Program) -> Result<asm::Program, CodegenError> {
     // Three passes
@@ -21,7 +25,7 @@ pub(crate) fn parse(tacky: &tacky::Program) -> Result<asm::Program, CodegenError
     // Pass 3:
     //   1. Insert AllocateStack instruction at the beginning of function_definition,
     //   2. Rewrite invalid MOV instructions.
-    //let ast = pass3(ast)?;
+    let ast = pass3(&ast, stack_size)?;
 
     Ok(ast)
 }
@@ -133,6 +137,40 @@ fn pass2(mut ast: asm::Program) -> Result<(asm::Program, usize), CodegenError> {
         });
 
     Ok((ast, replacer.size()))
+}
+
+fn pass3(ast: &asm::Program, stack_size: usize) -> Result<asm::Program, CodegenError> {
+    let mut instructions = Vec::with_capacity(ast.function_definition.instructions.len() + 1);
+
+    // Insert AllocateStack instruction at the beginning
+    instructions.push(asm::Instruction::AllocateStack(stack_size));
+
+    // Rewrite invalid MOV instructions to pass through the scratch register
+    for instruction in &ast.function_definition.instructions {
+        match instruction {
+            asm::Instruction::Mov {
+                src: asm::Operand::Stack(src),
+                dst: asm::Operand::Stack(dst),
+            } => {
+                instructions.push(asm::Instruction::Mov {
+                    src: asm::Operand::Stack(*src),
+                    dst: asm::Operand::Reg(MOV_SCRATCH_REGISTER),
+                });
+                instructions.push(asm::Instruction::Mov {
+                    src: asm::Operand::Reg(MOV_SCRATCH_REGISTER),
+                    dst: asm::Operand::Stack(*dst),
+                });
+            }
+            _ => instructions.push(instruction.clone()),
+        }
+    }
+
+    Ok(asm::Program {
+        function_definition: asm::Function {
+            name: ast.function_definition.name.clone(),
+            instructions,
+        },
+    })
 }
 
 #[cfg(test)]
@@ -317,6 +355,91 @@ mod tests {
                 },
                 asm::Instruction::Mov {
                     src: asm::Operand::Stack(asm::Offset(-8)),
+                    dst: asm::Operand::Stack(asm::Offset(-12)),
+                },
+                asm::Instruction::Unary {
+                    op: asm::UnaryOperator::Neg,
+                    dst: asm::Operand::Stack(asm::Offset(-12)),
+                },
+                asm::Instruction::Mov {
+                    src: asm::Operand::Stack(asm::Offset(-12)),
+                    dst: asm::Operand::Reg(asm::Reg::AX),
+                },
+                asm::Instruction::Ret,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_pass3() {
+        let pass2 = asm::Program {
+            function_definition: asm::Function {
+                name: asm::Identifier("main".to_string()),
+                instructions: vec![
+                    asm::Instruction::Mov {
+                        src: asm::Operand::Imm(8),
+                        dst: asm::Operand::Stack(asm::Offset(-4)),
+                    },
+                    asm::Instruction::Unary {
+                        op: asm::UnaryOperator::Neg,
+                        dst: asm::Operand::Stack(asm::Offset(-4)),
+                    },
+                    asm::Instruction::Mov {
+                        src: asm::Operand::Stack(asm::Offset(-4)),
+                        dst: asm::Operand::Stack(asm::Offset(-8)),
+                    },
+                    asm::Instruction::Unary {
+                        op: asm::UnaryOperator::Neg,
+                        dst: asm::Operand::Stack(asm::Offset(-8)),
+                    },
+                    asm::Instruction::Mov {
+                        src: asm::Operand::Stack(asm::Offset(-8)),
+                        dst: asm::Operand::Stack(asm::Offset(-12)),
+                    },
+                    asm::Instruction::Unary {
+                        op: asm::UnaryOperator::Neg,
+                        dst: asm::Operand::Stack(asm::Offset(-12)),
+                    },
+                    asm::Instruction::Mov {
+                        src: asm::Operand::Stack(asm::Offset(-12)),
+                        dst: asm::Operand::Reg(asm::Reg::AX),
+                    },
+                    asm::Instruction::Ret,
+                ],
+            },
+        };
+
+        let pass3 = pass3(&pass2, 12).unwrap();
+        assert_eq!(
+            pass3.function_definition.instructions,
+            vec![
+                asm::Instruction::AllocateStack(12),
+                asm::Instruction::Mov {
+                    src: asm::Operand::Imm(8),
+                    dst: asm::Operand::Stack(asm::Offset(-4)),
+                },
+                asm::Instruction::Unary {
+                    op: asm::UnaryOperator::Neg,
+                    dst: asm::Operand::Stack(asm::Offset(-4)),
+                },
+                asm::Instruction::Mov {
+                    src: asm::Operand::Stack(asm::Offset(-4)),
+                    dst: asm::Operand::Reg(MOV_SCRATCH_REGISTER),
+                },
+                asm::Instruction::Mov {
+                    src: asm::Operand::Reg(MOV_SCRATCH_REGISTER),
+                    dst: asm::Operand::Stack(asm::Offset(-8)),
+                },
+                asm::Instruction::Unary {
+                    op: asm::UnaryOperator::Neg,
+                    dst: asm::Operand::Stack(asm::Offset(-8)),
+                },
+                asm::Instruction::Mov {
+                    src: asm::Operand::Stack(asm::Offset(-8)),
+                    dst: asm::Operand::Reg(MOV_SCRATCH_REGISTER),
+                },
+                asm::Instruction::Mov {
+                    src: asm::Operand::Reg(MOV_SCRATCH_REGISTER),
                     dst: asm::Operand::Stack(asm::Offset(-12)),
                 },
                 asm::Instruction::Unary {

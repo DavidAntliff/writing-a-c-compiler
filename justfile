@@ -30,3 +30,9 @@ ch2:
     book-tests/test_compiler ./pcc.py --chapter 2 --stage lex
     book-tests/test_compiler ./pcc.py --chapter 2 --stage parse
     book-tests/test_compiler ./pcc.py --chapter 2 --stage tacky
+    book-tests/test_compiler ./pcc.py --chapter 2 --stage codegen
+    book-tests/test_compiler ./pcc.py --chapter 2
+
+
+listing_2-1:
+    cargo build && ./pcc.py ch/2/listing_2.1.c && ch/2/listing_2.1 ; echo $?
