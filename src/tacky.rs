@@ -104,6 +104,9 @@ fn emit_tacky(
             });
             dst
         }
+        ast_c::Expression::Binary(_, _, _) => {
+            panic!("Binary expressions are not implemented")
+        }
     }
 }
 

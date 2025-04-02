@@ -121,6 +121,18 @@ mod tests {
     use crate::parser::ParserError;
     use assert_matches::assert_matches;
 
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+
+    pub fn init_logger() {
+        INIT.call_once(|| {
+            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
+                .is_test(true)
+                .try_init()
+                .ok();
+        });
+    }
+
     #[test]
     fn test_listing_1_1() {
         // Listing on page 4, AST on page 13
@@ -248,6 +260,7 @@ mod tests {
                 expected,
                 found,
                 offset
-            }) if expected == "expression" && found == "Decrement" && offset == 45        );
+            }) if expected == "expression" && found == "Decrement" && offset == 45
+        );
     }
 }

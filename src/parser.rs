@@ -4,16 +4,18 @@
 //!   <program> ::= <function>
 //!   <function> ::= "int" <identifier> "(" "void" ")" "{" <statement> "}"
 //!   <statement> ::= "return" <exp> ";"
-//!   <exp> ::= <int> | <unop> <exp> | "(" <exp> ")"
+//!   <exp> := <factor> | <exp> <binop> <exp>
+//!   <factor> ::= <int> | <unop> <factor> | "(" <exp> ")"
 //!   <unop> ::= "-" | "~"
+//!   <binop> ::= "-" | "+" | "-" | "*" | "/" | "%"
 //!   <identifier> ::= ? An identifier token ?
 //!   <int> ::= ? A constant token ?
 //!
 
-use crate::ast_c::{Expression, Function, Program, Statement, UnaryOperator};
+use crate::ast_c::{BinaryOperator, Expression, Function, Program, Statement, UnaryOperator};
 use crate::lexer::{Keyword, Token, TokenKind};
 use thiserror::Error;
-use winnow::combinator::{fail, peek};
+use winnow::combinator::{fail, peek, trace};
 use winnow::error::{StrContext, StrContextValue};
 use winnow::prelude::*;
 use winnow::stream::TokenSlice;
@@ -196,26 +198,88 @@ fn statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     Ok(Statement::Return(exp))
 }
 
+/// Parses an expression with operator precedence, using Precedence Climbing.
+fn exp_internal(i: &mut Tokens<'_>, min_prec: usize) -> winnow::Result<Expression> {
+    log::debug!("exp_internal: {:?}, {min_prec}", i.peek_token());
+    trace("exp_internal", |i: &mut Tokens<'_>| {
+        log::debug!("exp_internal: about to get left on {:?}", i.peek_token());
+        let mut left = factor.parse_next(i)?;
+
+        // FIXME: there may not be another token...
+        if i.is_empty() {
+            return Ok(left);
+        }
+
+        let mut next_token = peek(any).parse_next(i)?;
+        log::debug!("exp_internal: next_token is {next_token:?}");
+
+        while next_token.is_binary_operator() && next_token.precedence() >= min_prec {
+            log::debug!(
+                "exp_internal: next_token is binary op, prec {} >= {min_prec}",
+                next_token.precedence()
+            );
+            let operator = binop.parse_next(i)?;
+            log::debug!("exp_internal: operator is {operator:?}");
+            let right = exp_internal(i, next_token.precedence() + 1)?;
+            log::debug!("exp_internal: right is {right:?}");
+            left = Expression::Binary(operator, Box::new(left), Box::new(right));
+            log::debug!("exp_internal: left is {left:?}");
+
+            // FIXME: needed?
+            if i.is_empty() {
+                return Ok(left);
+            }
+
+            next_token = peek(any).parse_next(i)?;
+            log::debug!("exp_internal: next_token is now {next_token:?}");
+        }
+
+        log::debug!("exp_internal: returning {left:?}");
+
+        Ok(left)
+    })
+    .parse_next(i)
+}
+
 fn exp(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
-    let next_token = peek(any).parse_next(i)?;
+    exp_internal(i, 0)
+}
 
-    let exp = match next_token.kind {
-        TokenKind::Constant(_) => Expression::Constant(int.parse_next(i)?),
-        TokenKind::BitwiseComplement | TokenKind::Negation => {
-            let op = unop.parse_next(i)?;
-            let exp = exp.parse_next(i)?;
-            Expression::Unary(op, Box::new(exp))
-        }
-        TokenKind::OpenParen => {
-            take(1usize).parse_next(i)?;
-            let exp = exp.parse_next(i)?;
-            literal(TokenKind::CloseParen).parse_next(i)?;
-            exp
-        }
-        _ => fail.parse_next(i)?,
-    };
+fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
+    log::debug!("factor: {:?}", i.peek_token());
+    trace("factor", |i: &mut _| {
+        let next_token: &Token = peek(any).parse_next(i)?;
 
-    Ok(exp)
+        log::debug!("factor: about to match on: {:?}", next_token);
+        let exp = match next_token.kind {
+            TokenKind::Constant(_) => Expression::Constant(int.parse_next(i)?),
+            TokenKind::BitwiseComplement | TokenKind::Negation => {
+                let op = unop.parse_next(i)?;
+                let inner_exp = factor.parse_next(i)?;
+                Expression::Unary(op, Box::new(inner_exp))
+            }
+            TokenKind::OpenParen => {
+                take(1usize).parse_next(i)?;
+                let inner_exp = exp.parse_next(i)?;
+                literal(TokenKind::CloseParen).parse_next(i)?;
+                inner_exp
+            }
+            _ => fail
+                .context(StrContext::Label("factor"))
+                // FIXME: error handling needs to cope with multiple "Expected" entries
+                // .context(StrContext::Expected(StrContextValue::Description(
+                //     "constant",
+                // )))
+                // .context(StrContext::Expected(StrContextValue::Description(
+                //     "unary operator",
+                // )))
+                // .context(StrContext::Expected(StrContextValue::Description("(")))
+                .parse_next(i)?,
+        };
+
+        Ok(exp)
+    })
+    .parse_next(i)
 }
 
 fn identifier(i: &mut Tokens<'_>) -> winnow::Result<String> {
@@ -273,9 +337,29 @@ fn unop(i: &mut Tokens<'_>) -> winnow::Result<UnaryOperator> {
     Ok(op)
 }
 
+fn binop(i: &mut Tokens<'_>) -> winnow::Result<BinaryOperator> {
+    let op = any
+        .try_map(|t: &Token| match t.kind {
+            TokenKind::Add => Ok(BinaryOperator::Add),
+            TokenKind::Negation => Ok(BinaryOperator::Subtract),
+            TokenKind::Multiply => Ok(BinaryOperator::Multiply),
+            TokenKind::Divide => Ok(BinaryOperator::Divide),
+            TokenKind::Remainder => Ok(BinaryOperator::Remainder),
+            _ => Err(ParserError {
+                message: "Expected a binary operator".to_string(),
+                expected: "binary operator".to_string(),
+                found: format!("{:?}", t.kind),
+                offset: t.span.start,
+            }),
+        })
+        .context(StrContext::Label("binop"))
+        .parse_next(i)?;
+    Ok(op)
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::ast_c::{Expression, UnaryOperator};
+    use crate::ast_c::{BinaryOperator, Expression, UnaryOperator};
     use crate::lexer::lex;
     use crate::parser::{exp, Tokens};
     use assert_matches::assert_matches;
@@ -334,6 +418,7 @@ mod tests {
         let input = r#"~(-4)"#;
         let tokens = lex(input).unwrap();
         let tokens = Tokens::new(&tokens);
+        eprintln!("***");
         let expression = exp.parse(tokens).unwrap();
         assert_eq!(
             expression,
@@ -354,5 +439,81 @@ mod tests {
         let tokens = Tokens::new(&tokens);
         let error = exp.parse(tokens).unwrap_err();
         assert_matches!(error, ParseError { .. });
+    }
+
+    #[test]
+    fn test_expression_precedence_1() {
+        // Figure 3-1
+        crate::tests::init_logger();
+
+        let input = r#"1 + (2 * 3)"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let expression = exp.parse(tokens).expect("should parse");
+        assert_eq!(
+            expression,
+            Expression::Binary(
+                BinaryOperator::Add,
+                Box::new(Expression::Constant(1)),
+                Box::new(Expression::Binary(
+                    BinaryOperator::Multiply,
+                    Box::new(Expression::Constant(2)),
+                    Box::new(Expression::Constant(3))
+                ))
+            )
+        );
+    }
+
+    #[test]
+    fn test_expression_precedence_2() {
+        // Figure 3-2
+        crate::tests::init_logger();
+
+        let input = r#"(1 + 2) * 3"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let expression = exp.parse(tokens).expect("should parse");
+        assert_eq!(
+            expression,
+            Expression::Binary(
+                BinaryOperator::Multiply,
+                Box::new(Expression::Binary(
+                    BinaryOperator::Add,
+                    Box::new(Expression::Constant(1)),
+                    Box::new(Expression::Constant(2))
+                )),
+                Box::new(Expression::Constant(3)),
+            )
+        );
+    }
+    #[test]
+    fn test_expression_precedence_3() {
+        // Page 55: 1 * 2 - 3 * (4 + 5)
+        crate::tests::init_logger();
+
+        let input = r#"1 * 2 - 3 * (4 + 5)"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let expression = exp.parse(tokens).expect("should parse");
+        assert_eq!(
+            expression,
+            Expression::Binary(
+                BinaryOperator::Subtract,
+                Box::new(Expression::Binary(
+                    BinaryOperator::Multiply,
+                    Box::new(Expression::Constant(1)),
+                    Box::new(Expression::Constant(2))
+                )),
+                Box::new(Expression::Binary(
+                    BinaryOperator::Multiply,
+                    Box::new(Expression::Constant(3)),
+                    Box::new(Expression::Binary(
+                        BinaryOperator::Add,
+                        Box::new(Expression::Constant(4)),
+                        Box::new(Expression::Constant(5))
+                    ))
+                ))
+            )
+        );
     }
 }

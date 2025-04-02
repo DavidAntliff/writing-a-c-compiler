@@ -24,6 +24,16 @@ pub(crate) struct Token {
     pub(crate) span: std::ops::Range<usize>,
 }
 
+impl Token {
+    pub(crate) fn is_binary_operator(&self) -> bool {
+        self.kind.is_binary_operator()
+    }
+
+    pub(crate) fn precedence(&self) -> usize {
+        self.kind.precedence()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum TokenKind {
     Keyword(Keyword),
@@ -41,6 +51,30 @@ pub(crate) enum TokenKind {
     Multiply,          // *
     Divide,            // /
     Remainder,         // %
+}
+
+impl TokenKind {
+    fn is_binary_operator(&self) -> bool {
+        matches!(
+            self,
+            TokenKind::Add
+                | TokenKind::Negation
+                | TokenKind::Multiply
+                | TokenKind::Divide
+                | TokenKind::Remainder
+        )
+    }
+
+    fn precedence(&self) -> usize {
+        match self {
+            TokenKind::Add => 45,
+            TokenKind::Negation => 45,
+            TokenKind::Multiply => 50,
+            TokenKind::Divide => 50,
+            TokenKind::Remainder => 50,
+            _ => panic!("Unexpected token: {:?}", self),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
