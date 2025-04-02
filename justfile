@@ -36,3 +36,8 @@ ch2:
 
 listing_2-1:
     cargo build && ./pcc.py ch/2/listing_2.1.c && ch/2/listing_2.1 ; echo $?
+
+
+ch3:
+    cargo build
+    book-tests/test_compiler ./pcc.py --chapter 3 --stage lex

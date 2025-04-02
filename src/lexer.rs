@@ -29,14 +29,18 @@ pub(crate) enum TokenKind {
     Keyword(Keyword),
     Identifier(Identifier),
     Constant(Constant),
-    OpenParen,
-    CloseParen,
-    OpenBrace,
-    CloseBrace,
-    Semicolon,
-    BitwiseComplement,
-    Negation,
-    Decrement,
+    OpenParen,         // (
+    CloseParen,        // )
+    OpenBrace,         // {
+    CloseBrace,        // }
+    Semicolon,         // ;
+    BitwiseComplement, // ~
+    Negation,          // -
+    Decrement,         // --
+    Add,               // +
+    Multiply,          // *
+    Divide,            // /
+    Remainder,         // %
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -74,6 +78,23 @@ fn token(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
         bitwise_complement,
         decrement,
         negation,
+        // decrement,
+        "+".with_span().map(|(_, span)| Token {
+            kind: TokenKind::Add,
+            span,
+        }),
+        "*".with_span().map(|(_, span)| Token {
+            kind: TokenKind::Multiply,
+            span,
+        }),
+        "/".with_span().map(|(_, span)| Token {
+            kind: TokenKind::Divide,
+            span,
+        }),
+        "%".with_span().map(|(_, span)| Token {
+            kind: TokenKind::Remainder,
+            span,
+        }),
     ))
     .parse_next(input)
 }
@@ -462,6 +483,34 @@ mod tests {
             Ok(Token {
                 kind: TokenKind::Decrement,
                 span: 0..2
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("+")),
+            Ok(Token {
+                kind: TokenKind::Add,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("*")),
+            Ok(Token {
+                kind: TokenKind::Multiply,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("/")),
+            Ok(Token {
+                kind: TokenKind::Divide,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("%")),
+            Ok(Token {
+                kind: TokenKind::Remainder,
+                span: 0..1
             })
         );
     }
