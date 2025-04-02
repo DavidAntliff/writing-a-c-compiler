@@ -200,42 +200,24 @@ fn statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
 
 /// Parses an expression with operator precedence, using Precedence Climbing.
 fn exp_internal(i: &mut Tokens<'_>, min_prec: usize) -> winnow::Result<Expression> {
-    log::debug!("exp_internal: {:?}, {min_prec}", i.peek_token());
     trace("exp_internal", |i: &mut Tokens<'_>| {
-        log::debug!("exp_internal: about to get left on {:?}", i.peek_token());
         let mut left = factor.parse_next(i)?;
 
-        // FIXME: there may not be another token...
         if i.is_empty() {
             return Ok(left);
         }
-
         let mut next_token = peek(any).parse_next(i)?;
-        log::debug!("exp_internal: next_token is {next_token:?}");
 
         while next_token.is_binary_operator() && next_token.precedence() >= min_prec {
-            log::debug!(
-                "exp_internal: next_token is binary op, prec {} >= {min_prec}",
-                next_token.precedence()
-            );
             let operator = binop.parse_next(i)?;
-            log::debug!("exp_internal: operator is {operator:?}");
             let right = exp_internal(i, next_token.precedence() + 1)?;
-            log::debug!("exp_internal: right is {right:?}");
             left = Expression::Binary(operator, Box::new(left), Box::new(right));
-            log::debug!("exp_internal: left is {left:?}");
 
-            // FIXME: needed?
             if i.is_empty() {
                 return Ok(left);
             }
-
             next_token = peek(any).parse_next(i)?;
-            log::debug!("exp_internal: next_token is now {next_token:?}");
         }
-
-        log::debug!("exp_internal: returning {left:?}");
-
         Ok(left)
     })
     .parse_next(i)
@@ -246,11 +228,8 @@ fn exp(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
 }
 
 fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
-    log::debug!("factor: {:?}", i.peek_token());
     trace("factor", |i: &mut _| {
         let next_token: &Token = peek(any).parse_next(i)?;
-
-        log::debug!("factor: about to match on: {:?}", next_token);
         let exp = match next_token.kind {
             TokenKind::Constant(_) => Expression::Constant(int.parse_next(i)?),
             TokenKind::BitwiseComplement | TokenKind::Negation => {
