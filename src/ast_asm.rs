@@ -16,6 +16,8 @@
 
 use std::fmt::{Display, Formatter};
 
+pub(crate) const STACK_SLOT_SIZE: usize = 4; // 4 bytes per temporary variable
+
 #[derive(Debug, PartialEq)]
 pub(crate) struct Program {
     pub(crate) function_definition: Function,
@@ -27,10 +29,13 @@ pub(crate) struct Function {
     pub(crate) instructions: Vec<Instruction>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Hash, Eq)]
 pub(crate) struct Identifier(pub(crate) String);
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy, Hash, Eq)]
+pub(crate) struct Offset(pub(crate) isize);
+
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Instruction {
     Mov {
         src: Operand,
@@ -41,11 +46,11 @@ pub(crate) enum Instruction {
         dst: Operand,
     },
     /// Allocate stack space in bytes
-    AllocateStack(isize),
+    AllocateStack(usize),
     Ret,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum UnaryOperator {
     Neg,
     Not,
@@ -57,7 +62,7 @@ pub(crate) enum Operand {
     Reg(Reg),
     Pseudo(Identifier),
     /// Stack offset in bytes
-    Stack(isize),
+    Stack(Offset),
 }
 
 impl Display for Operand {
