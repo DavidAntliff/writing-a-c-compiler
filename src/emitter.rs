@@ -29,7 +29,10 @@ pub(crate) fn emit(
     Ok(())
 }
 
-fn write_out(assembly: ast_asm::Program, writer: &mut BufWriter<File>) -> std::io::Result<()> {
+fn write_out<W: Write>(
+    assembly: ast_asm::Program,
+    writer: &mut BufWriter<W>,
+) -> std::io::Result<()> {
     let main_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
     let main_symbol = format!(
         "{main_prefix}{symbol}",
@@ -47,32 +50,86 @@ fn write_out(assembly: ast_asm::Program, writer: &mut BufWriter<File>) -> std::i
     writeln!(writer, "{indent}movq\t%rsp, %rbp")?;
 
     for instruction in assembly.function_definition.instructions {
-        write!(writer, "")?;
-        match instruction {
-            Instruction::Mov { src, dst } => {
-                writeln!(writer, "{indent}movl\t{src}, {dst}")?;
-            }
-            Instruction::Ret => {
-                writeln!(writer, "{indent}movq\t%rbp, %rsp")?;
-                writeln!(writer, "{indent}popq\t%rbp")?;
-                writeln!(writer, "{indent}ret")?;
-            }
-            Instruction::Unary { op, dst } => {
-                writeln!(writer, "{indent}{op}\t{dst}")?;
-            }
-            Instruction::Binary { op, src, dst } => {
-                writeln!(writer, "{indent}{op}\t{src}, {dst}")?;
-            }
-            Instruction::AllocateStack(n) => {
-                writeln!(writer, "{indent}subq\t${n}, %rsp")?;
-            }
-            _ => todo!(),
+        if instruction == Instruction::Ret {
+            writeln!(writer, "{indent}movq\t%rbp, %rsp")?;
+            writeln!(writer, "{indent}popq\t%rbp")?;
         }
+        writeln!(writer, "{indent}{instruction}")?;
     }
 
     if cfg!(target_os = "linux") {
         writeln!(writer, "{indent}.section\t.note.GNU-stack,\"\",@progbits")?;
     }
 
+    writer.flush()?;
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast_asm::{BinaryOperator, Function, Identifier, Offset, Program, Reg};
+    use crate::ast_asm::{Operand, UnaryOperator};
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_emit_instructions() {
+        let program = Program {
+            function_definition: Function {
+                name: Identifier("main".to_string()),
+                instructions: vec![
+                    Instruction::Mov {
+                        src: Operand::Reg(Reg::AX),
+                        dst: Operand::Imm(2),
+                    },
+                    Instruction::Unary {
+                        op: UnaryOperator::Not,
+                        dst: Operand::Stack(Offset(-4)),
+                    },
+                    Instruction::Binary {
+                        op: BinaryOperator::Add,
+                        src: Operand::Stack(Offset(-4)),
+                        dst: Operand::Reg(Reg::R10),
+                    },
+                    Instruction::Binary {
+                        op: BinaryOperator::Mult,
+                        src: Operand::Imm(42),
+                        dst: Operand::Reg(Reg::R10),
+                    },
+                    Instruction::Idiv(Operand::Reg(Reg::R10)),
+                    Instruction::Cdq,
+                    Instruction::AllocateStack(4),
+                    Instruction::Ret,
+                ],
+            },
+        };
+
+        // Create buffer to write to
+        let buffer = Vec::new();
+        let mut writer = BufWriter::new(buffer);
+
+        assert!(write_out(program, &mut writer).is_ok());
+        let result = String::from_utf8(writer.into_inner().unwrap()).unwrap();
+
+        assert_eq!(
+            result,
+            r#"	.globl	main
+main:
+	pushq	%rbp
+	movq	%rsp, %rbp
+	movl	%eax, $2
+	notl	-4(%rbp)
+	addl	-4(%rbp), %r10d
+	imull	$42, %r10d
+	idivl	%r10d
+	cdq
+	subq	$4, %rsp
+	movq	%rbp, %rsp
+	popq	%rbp
+	ret
+	.section	.note.GNU-stack,"",@progbits
+"#
+        )
+    }
 }

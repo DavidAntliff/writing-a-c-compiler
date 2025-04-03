@@ -76,6 +76,20 @@ pub(crate) enum Instruction {
     Ret,
 }
 
+impl Display for Instruction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instruction::Mov { src, dst } => write!(f, "movl\t{src}, {dst}"),
+            Instruction::Unary { op, dst } => write!(f, "{op}\t{dst}"),
+            Instruction::Binary { op, src, dst } => write!(f, "{op}\t{src}, {dst}"),
+            Instruction::Idiv(src) => write!(f, "idivl\t{src}"),
+            Instruction::Cdq => write!(f, "cdq"),
+            Instruction::AllocateStack(size) => write!(f, "subq\t${size}, %rsp"),
+            Instruction::Ret => write!(f, "ret"),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum UnaryOperator {
     Neg,

@@ -1,5 +1,4 @@
 use crate::ast_asm as asm;
-use crate::ast_asm::Reg;
 use crate::tacky;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -11,22 +10,25 @@ pub struct CodegenError {
 }
 
 // Register used to fix source and destination operands
-const SRC_SCRATCH_REGISTER: Reg = Reg::R10;
-const DST_SCRATCH_REGISTER: Reg = Reg::R11;
+const SRC_SCRATCH_REGISTER: asm::Reg = asm::Reg::R10;
+const DST_SCRATCH_REGISTER: asm::Reg = asm::Reg::R11;
 
 pub(crate) fn parse(tacky: &tacky::Program) -> Result<asm::Program, CodegenError> {
     // Three passes
 
     // Pass 1 - convert TACKY AST to ASM AST, using pseudo registers for variables
     let ast = pass1(tacky);
+    log::debug!("Codegen PASS 1: {ast:#?}");
 
     // Pass 2 - replace pseudo registers with Stack operands
     let (ast, stack_size) = pass2(ast)?;
+    log::debug!("Codegen PASS 2: {ast:#?}");
 
     // Pass 3:
     //   1. Insert AllocateStack instruction at the beginning of function_definition,
     //   2. Rewrite invalid MOV instructions.
     let ast = pass3(&ast, stack_size)?;
+    log::debug!("Codegen PASS 3: {ast:#?}");
 
     Ok(ast)
 }
@@ -103,13 +105,13 @@ fn function_definition(function: &tacky::FunctionDefinition) -> asm::Function {
                     // divide operations:
                     instructions.push(asm::Instruction::Mov {
                         src: src1.clone(),
-                        dst: asm::Operand::Reg(Reg::AX),
+                        dst: asm::Operand::Reg(asm::Reg::AX),
                     });
                     instructions.push(asm::Instruction::Cdq);
                     instructions.push(asm::Instruction::Idiv(src2));
                     let result_reg = match op {
-                        tacky::BinaryOperator::Divide => Reg::AX,
-                        tacky::BinaryOperator::Remainder => Reg::DX,
+                        tacky::BinaryOperator::Divide => asm::Reg::AX,
+                        tacky::BinaryOperator::Remainder => asm::Reg::DX,
                         _ => unreachable!(),
                     };
                     instructions.push(asm::Instruction::Mov {
@@ -249,7 +251,7 @@ fn pass3(ast: &asm::Program, stack_size: usize) -> Result<asm::Program, CodegenE
             //   -> copy destination to scratch register first
             asm::Instruction::Binary {
                 op,
-                src: asm::Operand::Imm(_),
+                src, //asm::Operand::Imm(_),
                 dst: asm::Operand::Stack(dst),
             } if *op == asm::BinaryOperator::Mult => {
                 instructions.push(asm::Instruction::Mov {
@@ -258,7 +260,7 @@ fn pass3(ast: &asm::Program, stack_size: usize) -> Result<asm::Program, CodegenE
                 });
                 instructions.push(asm::Instruction::Binary {
                     op: op.clone(),
-                    src: asm::Operand::Imm(3),
+                    src: src.clone(),
                     dst: asm::Operand::Reg(DST_SCRATCH_REGISTER),
                 });
                 instructions.push(asm::Instruction::Mov {
@@ -289,7 +291,7 @@ mod tests {
         let tacky_program = tacky::Program {
             function_definition: tacky::FunctionDefinition {
                 name: "main".to_string(),
-                body: vec![tacky::Instruction::Return(tacky::Val::Constant(2))],
+                body: vec![Instruction::Return(Val::Constant(2))],
             },
         };
 
@@ -737,12 +739,12 @@ mod tests {
             vec![
                 asm::Instruction::Mov {
                     src: asm::Operand::Imm(2),
-                    dst: asm::Operand::Reg(Reg::AX),
+                    dst: asm::Operand::Reg(asm::Reg::AX),
                 },
                 asm::Instruction::Cdq,
                 asm::Instruction::Idiv(asm::Operand::Imm(3)),
                 asm::Instruction::Mov {
-                    src: asm::Operand::Reg(Reg::DX),
+                    src: asm::Operand::Reg(asm::Reg::DX),
                     dst: asm::Operand::Pseudo(asm::Identifier("tmp.0".into())),
                 },
             ]

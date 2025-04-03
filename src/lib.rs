@@ -85,8 +85,6 @@ pub fn do_the_thing(
     //let assembly = codegen::parse(&ast)?;
     let assembly = codegen::parse(&tacky)?;
 
-    log::debug!("Assembly: {assembly:#?}");
-
     if stop_after_codegen {
         return Ok(());
     }

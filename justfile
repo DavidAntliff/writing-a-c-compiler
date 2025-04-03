@@ -44,3 +44,4 @@ ch3:
     book-tests/test_compiler ./pcc.py --chapter 3 --stage parse
     book-tests/test_compiler ./pcc.py --chapter 3 --stage tacky
     book-tests/test_compiler ./pcc.py --chapter 3 --stage codegen
+    book-tests/test_compiler ./pcc.py --chapter 3

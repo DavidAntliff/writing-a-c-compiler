@@ -115,7 +115,7 @@ fn emit_tacky(
             let tacky_op = convert_unop(op);
             instructions.push(Instruction::Unary {
                 op: tacky_op,
-                src: src.clone(),
+                src,
                 dst: dst.clone(),
             });
             dst
@@ -128,8 +128,8 @@ fn emit_tacky(
             let tacky = convert_binop(op);
             instructions.push(Instruction::Binary {
                 op: tacky,
-                src1: src1.clone(),
-                src2: src2.clone(),
+                src1,
+                src2,
                 dst: dst.clone(),
             });
             dst
