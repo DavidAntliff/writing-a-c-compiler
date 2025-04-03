@@ -3,10 +3,12 @@
 //! ASDL:
 //!   program = Program(function_definition)
 //!   function_definition = Function(identifier name, instruction* body)
-//!   instruction = Return(val) | Unary(unary_operator, val src, val dst)
+//!   instruction = Return(val)
+//!               | Unary(unary_operator, val src, val dst)
+//!               | Binary(binary_operator, val src1, val src2, val dst)
 //!   val = Constant(int) | Var(identifier)
 //!   unary_operator = Complement | Negate
-//!
+//!   binary_operator = Add | Subtract | Multiply | Divide | Remainder
 //!
 
 use crate::ast_c;
@@ -33,6 +35,12 @@ pub(crate) enum Instruction {
         src: Val,
         dst: Val,
     },
+    Binary {
+        op: BinaryOperator,
+        src1: Val,
+        src2: Val,
+        dst: Val,
+    },
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -45,6 +53,15 @@ pub(crate) enum Val {
 pub(crate) enum UnaryOperator {
     Complement,
     Negate,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum BinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
 }
 
 #[derive(Debug, PartialEq, Error)]
@@ -94,8 +111,7 @@ fn emit_tacky(
         ast_c::Expression::Constant(c) => Val::Constant(*c),
         ast_c::Expression::Unary(op, inner) => {
             let src = emit_tacky(inner, instructions, temporary);
-            let dst_name = temporary.next();
-            let dst = Val::Var(dst_name.to_string());
+            let dst = Val::Var(temporary.next().to_string());
             let tacky_op = convert_unop(op);
             instructions.push(Instruction::Unary {
                 op: tacky_op,
@@ -104,8 +120,19 @@ fn emit_tacky(
             });
             dst
         }
-        ast_c::Expression::Binary(_, _, _) => {
-            panic!("Binary expressions are not implemented")
+        ast_c::Expression::Binary(op, e1, e2) => {
+            // Unsequenced - indeterminate order of evaluation
+            let src1 = emit_tacky(e1, instructions, temporary);
+            let src2 = emit_tacky(e2, instructions, temporary);
+            let dst = Val::Var(temporary.next().to_string());
+            let tacky = convert_binop(op);
+            instructions.push(Instruction::Binary {
+                op: tacky,
+                src1: src1.clone(),
+                src2: src2.clone(),
+                dst: dst.clone(),
+            });
+            dst
         }
     }
 }
@@ -114,6 +141,16 @@ fn convert_unop(op: &ast_c::UnaryOperator) -> UnaryOperator {
     match op {
         ast_c::UnaryOperator::Complement => UnaryOperator::Complement,
         ast_c::UnaryOperator::Negate => UnaryOperator::Negate,
+    }
+}
+
+fn convert_binop(op: &ast_c::BinaryOperator) -> BinaryOperator {
+    match op {
+        ast_c::BinaryOperator::Add => BinaryOperator::Add,
+        ast_c::BinaryOperator::Subtract => BinaryOperator::Subtract,
+        ast_c::BinaryOperator::Multiply => BinaryOperator::Multiply,
+        ast_c::BinaryOperator::Divide => BinaryOperator::Divide,
+        ast_c::BinaryOperator::Remainder => BinaryOperator::Remainder,
     }
 }
 
@@ -133,6 +170,7 @@ fn emit_statement(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast_c::Expression;
 
     #[test]
     fn test_constant_expression() {
@@ -248,7 +286,8 @@ mod tests {
     }
 
     #[test]
-    fn test_program() {
+    fn test_program_return_unary_nested() {
+        // int main(void) { return -(~(-8)); }
         let program = ast_c::Program {
             function: ast_c::Function {
                 name: "main".to_string(),
@@ -287,6 +326,69 @@ mod tests {
                             dst: Val::Var("tmp.2".into()),
                         },
                         Instruction::Return(Val::Var("tmp.2".into())),
+                    ],
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn test_program_return_binary() {
+        // int main(void) { return 1 * 2 - 3 * (4 + 5); }   // -25
+        let program = ast_c::Program {
+            function: ast_c::Function {
+                name: "main".to_string(),
+                body: ast_c::Statement::Return(Expression::Binary(
+                    ast_c::BinaryOperator::Subtract,
+                    Box::new(Expression::Binary(
+                        ast_c::BinaryOperator::Multiply,
+                        Box::new(Expression::Constant(1)),
+                        Box::new(Expression::Constant(2)),
+                    )),
+                    Box::new(Expression::Binary(
+                        ast_c::BinaryOperator::Multiply,
+                        Box::new(Expression::Constant(3)),
+                        Box::new(Expression::Binary(
+                            ast_c::BinaryOperator::Add,
+                            Box::new(Expression::Constant(4)),
+                            Box::new(Expression::Constant(5)),
+                        )),
+                    )),
+                )),
+            },
+        };
+
+        assert_eq!(
+            parse(&program).unwrap(),
+            Program {
+                function_definition: FunctionDefinition {
+                    name: "main".to_string(),
+                    body: vec![
+                        Instruction::Binary {
+                            op: BinaryOperator::Multiply,
+                            src1: Val::Constant(1),
+                            src2: Val::Constant(2),
+                            dst: Val::Var("tmp.0".into()),
+                        },
+                        Instruction::Binary {
+                            op: BinaryOperator::Add,
+                            src1: Val::Constant(4),
+                            src2: Val::Constant(5),
+                            dst: Val::Var("tmp.1".into()),
+                        },
+                        Instruction::Binary {
+                            op: BinaryOperator::Multiply,
+                            src1: Val::Constant(3),
+                            src2: Val::Var("tmp.1".into()),
+                            dst: Val::Var("tmp.2".into()),
+                        },
+                        Instruction::Binary {
+                            op: BinaryOperator::Subtract,
+                            src1: Val::Var("tmp.0".into()),
+                            src2: Val::Var("tmp.2".into()),
+                            dst: Val::Var("tmp.3".into()),
+                        },
+                        Instruction::Return(Val::Var("tmp.3".into())),
                     ],
                 }
             }

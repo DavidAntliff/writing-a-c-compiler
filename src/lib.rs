@@ -263,4 +263,6 @@ mod tests {
             }) if expected == "expression" && found == "Decrement" && offset == 45
         );
     }
+
+    // TODO: Add integration tests - full .c to .s compilation
 }

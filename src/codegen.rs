@@ -74,6 +74,14 @@ fn function_definition(function: &tacky::FunctionDefinition) -> asm::Function {
                 });
                 instructions.push(asm::Instruction::Unary { op, dst });
             }
+            tacky::Instruction::Binary {
+                op,
+                src1,
+                src2,
+                dst,
+            } => {
+                todo!()
+            }
         });
 
     asm::Function {

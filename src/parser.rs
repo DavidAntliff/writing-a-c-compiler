@@ -239,7 +239,7 @@ fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
             }
             TokenKind::OpenParen => {
                 take(1usize).parse_next(i)?;
-                let inner_exp = exp.parse_next(i)?;
+                let inner_exp = exp_internal(i, 0)?;
                 literal(TokenKind::CloseParen).parse_next(i)?;
                 inner_exp
             }
