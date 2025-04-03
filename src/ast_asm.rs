@@ -4,15 +4,28 @@
 //!   program = Program(function_definition)
 //!   function_definition = Function(identifier name, instruction* instructions)
 //!   instruction = Mov(operand src, operand dst)
-//!               | Unary(unary operator, operand)
+//!               | Unary(unary_operator, operand)
+//!               | Binary(binary_operator, operand, operand)
+//!               | Idiv(operand)
+//!               | Cdq
 //!               | AllocateStack(int)
 //!               | Ret
 //!   unary_operator = Neg | Not
+//!   binary_operator = Add | Sub | Mult
 //!   operand = Imm(int)
 //!           | Reg(reg)
 //!           | Pseudo(identifier)
 //!           | Stack(int)
-//!   reg = AX | R10
+//!   reg = AX | DX | R10 | R11
+//!
+//!
+//! Register Usage:
+//!
+//!   AX: return value / idiv quotient
+//!   DX: division remainder
+//!   R10: scratch
+//!   R11: scratch
+//!
 
 use std::fmt::{Display, Formatter};
 
@@ -51,6 +64,13 @@ pub(crate) enum Instruction {
         op: UnaryOperator,
         dst: Operand,
     },
+    Binary {
+        op: BinaryOperator,
+        src: Operand,
+        dst: Operand,
+    },
+    Idiv(Operand),
+    Cdq,
     /// Allocate stack space in bytes
     AllocateStack(usize),
     Ret,
@@ -67,6 +87,23 @@ impl Display for UnaryOperator {
         match self {
             UnaryOperator::Neg => write!(f, "negl"),
             UnaryOperator::Not => write!(f, "notl"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum BinaryOperator {
+    Add,
+    Sub,
+    Mult,
+}
+
+impl Display for BinaryOperator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinaryOperator::Add => write!(f, "addl"),
+            BinaryOperator::Sub => write!(f, "subl"),
+            BinaryOperator::Mult => write!(f, "imull"),
         }
     }
 }
@@ -94,14 +131,18 @@ impl Display for Operand {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Reg {
     AX,
+    DX,
     R10,
+    R11,
 }
 
 impl Display for Reg {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Reg::AX => write!(f, "eax"),
+            Reg::DX => write!(f, "edx"),
             Reg::R10 => write!(f, "r10d"),
+            Reg::R11 => write!(f, "r11d"),
         }
     }
 }

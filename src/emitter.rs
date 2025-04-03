@@ -60,9 +60,13 @@ fn write_out(assembly: ast_asm::Program, writer: &mut BufWriter<File>) -> std::i
             Instruction::Unary { op, dst } => {
                 writeln!(writer, "{indent}{op}\t{dst}")?;
             }
+            Instruction::Binary { op, src, dst } => {
+                writeln!(writer, "{indent}{op}\t{src}, {dst}")?;
+            }
             Instruction::AllocateStack(n) => {
                 writeln!(writer, "{indent}subq\t${n}, %rsp")?;
             }
+            _ => todo!(),
         }
     }
 
