@@ -49,4 +49,9 @@ pub(crate) enum BinaryOperator {
     Multiply,
     Divide,
     Remainder,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
 }

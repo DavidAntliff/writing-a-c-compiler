@@ -62,6 +62,11 @@ pub(crate) enum BinaryOperator {
     Multiply,
     Divide,
     Remainder,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
 }
 
 #[derive(Debug, PartialEq, Error)]
@@ -151,6 +156,11 @@ fn convert_binop(op: &ast_c::BinaryOperator) -> BinaryOperator {
         ast_c::BinaryOperator::Multiply => BinaryOperator::Multiply,
         ast_c::BinaryOperator::Divide => BinaryOperator::Divide,
         ast_c::BinaryOperator::Remainder => BinaryOperator::Remainder,
+        ast_c::BinaryOperator::BitAnd => BinaryOperator::BitAnd,
+        ast_c::BinaryOperator::BitOr => BinaryOperator::BitOr,
+        ast_c::BinaryOperator::BitXor => BinaryOperator::BitXor,
+        ast_c::BinaryOperator::ShiftLeft => BinaryOperator::ShiftLeft,
+        ast_c::BinaryOperator::ShiftRight => BinaryOperator::ShiftRight,
     }
 }
 

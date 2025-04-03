@@ -51,6 +51,11 @@ pub(crate) enum TokenKind {
     Multiply,          // *
     Divide,            // /
     Remainder,         // %
+    BitwiseAnd,        // &
+    BitwiseOr,         // |
+    BitwiseXor,        // ^
+    BitwiseShiftLeft,  // <<
+    BitwiseShiftRight, // >>
 }
 
 impl TokenKind {
@@ -62,6 +67,11 @@ impl TokenKind {
                 | TokenKind::Multiply
                 | TokenKind::Divide
                 | TokenKind::Remainder
+                | TokenKind::BitwiseAnd
+                | TokenKind::BitwiseOr
+                | TokenKind::BitwiseXor
+                | TokenKind::BitwiseShiftLeft
+                | TokenKind::BitwiseShiftRight
         )
     }
 
@@ -72,6 +82,11 @@ impl TokenKind {
             TokenKind::Multiply => 50,
             TokenKind::Divide => 50,
             TokenKind::Remainder => 50,
+            TokenKind::BitwiseAnd => 35,
+            TokenKind::BitwiseOr => 25,
+            TokenKind::BitwiseXor => 30,
+            TokenKind::BitwiseShiftLeft => 40,
+            TokenKind::BitwiseShiftRight => 40,
             _ => panic!("Unexpected token: {:?}", self),
         }
     }
@@ -127,6 +142,26 @@ fn token(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
         }),
         "%".with_span().map(|(_, span)| Token {
             kind: TokenKind::Remainder,
+            span,
+        }),
+        "&".with_span().map(|(_, span)| Token {
+            kind: TokenKind::BitwiseAnd,
+            span,
+        }),
+        "|".with_span().map(|(_, span)| Token {
+            kind: TokenKind::BitwiseOr,
+            span,
+        }),
+        "^".with_span().map(|(_, span)| Token {
+            kind: TokenKind::BitwiseXor,
+            span,
+        }),
+        "<<".with_span().map(|(_, span)| Token {
+            kind: TokenKind::BitwiseShiftLeft,
+            span,
+        }),
+        ">>".with_span().map(|(_, span)| Token {
+            kind: TokenKind::BitwiseShiftRight,
             span,
         }),
     ))
@@ -390,21 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lex_token() {
-        assert_eq!(
-            token.parse(LocatingInput::new("0")),
-            Ok(Token {
-                kind: TokenKind::Constant(0),
-                span: 0..1
-            })
-        );
-        assert_eq!(
-            token.parse(LocatingInput::new("123")),
-            Ok(Token {
-                kind: TokenKind::Constant(123),
-                span: 0..3
-            })
-        );
+    fn test_lex_delimiter() {
         assert_eq!(
             token.parse(LocatingInput::new("(")),
             Ok(Token {
@@ -440,6 +461,10 @@ mod tests {
                 span: 0..1
             })
         );
+    }
+
+    #[test]
+    fn test_lex_keyword() {
         assert_eq!(
             token.parse(LocatingInput::new("int")),
             Ok(Token {
@@ -461,6 +486,10 @@ mod tests {
                 span: 0..6
             })
         );
+    }
+
+    #[test]
+    fn test_lex_identifier() {
         assert_eq!(
             token.parse(LocatingInput::new("a")),
             Ok(Token {
@@ -496,8 +525,10 @@ mod tests {
                 span: 0..2
             })
         );
+    }
 
-        // chapter 2
+    #[test]
+    fn test_lex_unary_operator() {
         assert_eq!(
             token.parse(LocatingInput::new("~")),
             Ok(Token {
@@ -519,6 +550,10 @@ mod tests {
                 span: 0..2
             })
         );
+    }
+
+    #[test]
+    fn test_lex_binary_operator() {
         assert_eq!(
             token.parse(LocatingInput::new("+")),
             Ok(Token {
@@ -526,6 +561,9 @@ mod tests {
                 span: 0..1
             })
         );
+
+        // - is a special case, as it's also a unary operator
+
         assert_eq!(
             token.parse(LocatingInput::new("*")),
             Ok(Token {
@@ -545,6 +583,45 @@ mod tests {
             Ok(Token {
                 kind: TokenKind::Remainder,
                 span: 0..1
+            })
+        );
+    }
+
+    #[test]
+    fn test_lex_bitwise_binary_operator() {
+        assert_eq!(
+            token.parse(LocatingInput::new("&")),
+            Ok(Token {
+                kind: TokenKind::BitwiseAnd,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("|")),
+            Ok(Token {
+                kind: TokenKind::BitwiseOr,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("^")),
+            Ok(Token {
+                kind: TokenKind::BitwiseXor,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("<<")),
+            Ok(Token {
+                kind: TokenKind::BitwiseShiftLeft,
+                span: 0..2
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new(">>")),
+            Ok(Token {
+                kind: TokenKind::BitwiseShiftRight,
+                span: 0..2
             })
         );
     }

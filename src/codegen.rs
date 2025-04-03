@@ -91,6 +91,11 @@ fn function_definition(function: &tacky::FunctionDefinition) -> asm::Function {
                     tacky::BinaryOperator::Add => Some(asm::BinaryOperator::Add),
                     tacky::BinaryOperator::Subtract => Some(asm::BinaryOperator::Sub),
                     tacky::BinaryOperator::Multiply => Some(asm::BinaryOperator::Mult),
+                    tacky::BinaryOperator::BitAnd => Some(asm::BinaryOperator::BitAnd),
+                    tacky::BinaryOperator::BitOr => Some(asm::BinaryOperator::BitOr),
+                    tacky::BinaryOperator::BitXor => Some(asm::BinaryOperator::BitXor),
+                    tacky::BinaryOperator::ShiftLeft => Some(asm::BinaryOperator::BitShiftLeft),
+                    tacky::BinaryOperator::ShiftRight => Some(asm::BinaryOperator::BitShiftRight),
                     _ => None,
                 };
 
@@ -235,7 +240,12 @@ fn pass3(ast: &asm::Program, stack_size: usize) -> Result<asm::Program, CodegenE
                 op,
                 src: asm::Operand::Stack(src),
                 dst: asm::Operand::Stack(dst),
-            } if *op == asm::BinaryOperator::Add || *op == asm::BinaryOperator::Sub => {
+            } if *op == asm::BinaryOperator::Add
+                || *op == asm::BinaryOperator::Sub
+                || *op == asm::BinaryOperator::BitAnd
+                || *op == asm::BinaryOperator::BitOr
+                || *op == asm::BinaryOperator::BitXor =>
+            {
                 instructions.push(asm::Instruction::Mov {
                     src: asm::Operand::Stack(*src),
                     dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
@@ -251,7 +261,7 @@ fn pass3(ast: &asm::Program, stack_size: usize) -> Result<asm::Program, CodegenE
             //   -> copy destination to scratch register first
             asm::Instruction::Binary {
                 op,
-                src, //asm::Operand::Imm(_),
+                src,
                 dst: asm::Operand::Stack(dst),
             } if *op == asm::BinaryOperator::Mult => {
                 instructions.push(asm::Instruction::Mov {
@@ -266,6 +276,26 @@ fn pass3(ast: &asm::Program, stack_size: usize) -> Result<asm::Program, CodegenE
                 instructions.push(asm::Instruction::Mov {
                     src: asm::Operand::Reg(DST_SCRATCH_REGISTER),
                     dst: asm::Operand::Stack(*dst),
+                });
+            }
+
+            // SAL/SAR instructions with a memory address as src are not allowed
+            //   -> copy source to CX register first
+            asm::Instruction::Binary {
+                op,
+                src: asm::Operand::Stack(src),
+                dst,
+            } if *op == asm::BinaryOperator::BitShiftLeft
+                || *op == asm::BinaryOperator::BitShiftRight =>
+            {
+                instructions.push(asm::Instruction::Mov {
+                    src: asm::Operand::Stack(*src),
+                    dst: asm::Operand::Reg(asm::Reg::CX),
+                });
+                instructions.push(asm::Instruction::Binary {
+                    op: op.clone(),
+                    src: asm::Operand::Reg(asm::Reg::CX),
+                    dst: dst.clone(),
                 });
             }
 
@@ -351,6 +381,103 @@ mod tests {
                     dst: asm::Operand::Reg(asm::Reg::AX),
                 },
                 asm::Instruction::Ret,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_pass1_binary_add() {
+        let tacky_program = tacky::Program {
+            function_definition: tacky::FunctionDefinition {
+                name: "main".to_string(),
+                body: vec![Instruction::Binary {
+                    op: BinaryOperator::Add,
+                    src1: Val::Constant(2),
+                    src2: Val::Constant(3),
+                    dst: Val::Var("tmp.0".into()),
+                }],
+            },
+        };
+
+        let ast = pass1(&tacky_program);
+
+        assert_eq!(
+            ast.function_definition.instructions,
+            vec![
+                asm::Instruction::Mov {
+                    src: asm::Operand::Imm(2),
+                    dst: asm::Operand::Pseudo(asm::Identifier("tmp.0".into())),
+                },
+                asm::Instruction::Binary {
+                    op: asm::BinaryOperator::Add,
+                    src: asm::Operand::Imm(3),
+                    dst: asm::Operand::Pseudo(asm::Identifier("tmp.0".into())),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_pass1_binary_remainder() {
+        let tacky_program = tacky::Program {
+            function_definition: tacky::FunctionDefinition {
+                name: "main".to_string(),
+                body: vec![Instruction::Binary {
+                    op: BinaryOperator::Remainder,
+                    src1: Val::Constant(2),
+                    src2: Val::Constant(3),
+                    dst: Val::Var("tmp.0".into()),
+                }],
+            },
+        };
+
+        let ast = pass1(&tacky_program);
+
+        assert_eq!(
+            ast.function_definition.instructions,
+            vec![
+                asm::Instruction::Mov {
+                    src: asm::Operand::Imm(2),
+                    dst: asm::Operand::Reg(asm::Reg::AX),
+                },
+                asm::Instruction::Cdq,
+                asm::Instruction::Idiv(asm::Operand::Imm(3)),
+                asm::Instruction::Mov {
+                    src: asm::Operand::Reg(asm::Reg::DX),
+                    dst: asm::Operand::Pseudo(asm::Identifier("tmp.0".into())),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_pass1_binary_bitwise_xor() {
+        let tacky_program = tacky::Program {
+            function_definition: tacky::FunctionDefinition {
+                name: "main".to_string(),
+                body: vec![Instruction::Binary {
+                    op: BinaryOperator::BitXor,
+                    src1: Val::Constant(2),
+                    src2: Val::Constant(3),
+                    dst: Val::Var("tmp.0".into()),
+                }],
+            },
+        };
+
+        let ast = pass1(&tacky_program);
+
+        assert_eq!(
+            ast.function_definition.instructions,
+            vec![
+                asm::Instruction::Mov {
+                    src: asm::Operand::Imm(2),
+                    dst: asm::Operand::Pseudo(asm::Identifier("tmp.0".into())),
+                },
+                asm::Instruction::Binary {
+                    op: asm::BinaryOperator::BitXor,
+                    src: asm::Operand::Imm(3),
+                    dst: asm::Operand::Pseudo(asm::Identifier("tmp.0".into())),
+                },
             ]
         );
     }
@@ -687,65 +814,108 @@ mod tests {
     }
 
     #[test]
-    fn test_pass1_binary_add() {
-        let tacky_program = tacky::Program {
-            function_definition: tacky::FunctionDefinition {
-                name: "main".to_string(),
-                body: vec![Instruction::Binary {
-                    op: BinaryOperator::Add,
-                    src1: Val::Constant(2),
-                    src2: Val::Constant(3),
-                    dst: Val::Var("tmp.0".into()),
-                }],
+    fn test_pass3_bitwise_and_or_xor() {
+        // bitwise and/or/xor cannot have two addresses
+        //   -> becomes mov + and/or/xor
+        let pass2 = asm::Program {
+            function_definition: asm::Function {
+                name: asm::Identifier("main".to_string()),
+                instructions: vec![
+                    asm::Instruction::Binary {
+                        op: asm::BinaryOperator::BitAnd,
+                        src: asm::Operand::Stack(asm::Offset(-12)),
+                        dst: asm::Operand::Stack(asm::Offset(-4)),
+                    },
+                    asm::Instruction::Binary {
+                        op: asm::BinaryOperator::BitOr,
+                        src: asm::Operand::Stack(asm::Offset(-8)),
+                        dst: asm::Operand::Stack(asm::Offset(-12)),
+                    },
+                    asm::Instruction::Binary {
+                        op: asm::BinaryOperator::BitXor,
+                        src: asm::Operand::Stack(asm::Offset(-8)),
+                        dst: asm::Operand::Stack(asm::Offset(-12)),
+                    },
+                ],
             },
         };
 
-        let ast = pass1(&tacky_program);
-
+        let pass3 = pass3(&pass2, 12).unwrap();
         assert_eq!(
-            ast.function_definition.instructions,
+            pass3.function_definition.instructions,
             vec![
+                asm::Instruction::AllocateStack(12),
                 asm::Instruction::Mov {
-                    src: asm::Operand::Imm(2),
-                    dst: asm::Operand::Pseudo(asm::Identifier("tmp.0".into())),
+                    src: asm::Operand::Stack(asm::Offset(-12)),
+                    dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
                 },
                 asm::Instruction::Binary {
-                    op: asm::BinaryOperator::Add,
-                    src: asm::Operand::Imm(3),
-                    dst: asm::Operand::Pseudo(asm::Identifier("tmp.0".into())),
+                    op: asm::BinaryOperator::BitAnd,
+                    src: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                    dst: asm::Operand::Stack(asm::Offset(-4)),
+                },
+                asm::Instruction::Mov {
+                    src: asm::Operand::Stack(asm::Offset(-8)),
+                    dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                },
+                asm::Instruction::Binary {
+                    op: asm::BinaryOperator::BitOr,
+                    src: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                    dst: asm::Operand::Stack(asm::Offset(-12)),
+                },
+                asm::Instruction::Mov {
+                    src: asm::Operand::Stack(asm::Offset(-8)),
+                    dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                },
+                asm::Instruction::Binary {
+                    op: asm::BinaryOperator::BitXor,
+                    src: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                    dst: asm::Operand::Stack(asm::Offset(-12)),
                 },
             ]
         );
     }
 
     #[test]
-    fn test_pass1_binary_remainder() {
-        let tacky_program = tacky::Program {
-            function_definition: tacky::FunctionDefinition {
-                name: "main".to_string(),
-                body: vec![Instruction::Binary {
-                    op: BinaryOperator::Remainder,
-                    src1: Val::Constant(2),
-                    src2: Val::Constant(3),
-                    dst: Val::Var("tmp.0".into()),
-                }],
+    fn test_pass3_bitwise_shift() {
+        // bitwise shift cannot have a src address
+        //   -> becomes mov + and/or/xor
+        let pass2 = asm::Program {
+            function_definition: asm::Function {
+                name: asm::Identifier("main".to_string()),
+                instructions: vec![
+                    asm::Instruction::Binary {
+                        op: asm::BinaryOperator::BitShiftLeft,
+                        src: asm::Operand::Stack(asm::Offset(-12)),
+                        dst: asm::Operand::Stack(asm::Offset(-4)),
+                    },
+                    asm::Instruction::Binary {
+                        op: asm::BinaryOperator::BitShiftRight,
+                        src: asm::Operand::Imm(9),
+                        dst: asm::Operand::Stack(asm::Offset(-12)),
+                    },
+                ],
             },
         };
 
-        let ast = pass1(&tacky_program);
-
+        let pass3 = pass3(&pass2, 12).unwrap();
         assert_eq!(
-            ast.function_definition.instructions,
+            pass3.function_definition.instructions,
             vec![
+                asm::Instruction::AllocateStack(12),
                 asm::Instruction::Mov {
-                    src: asm::Operand::Imm(2),
-                    dst: asm::Operand::Reg(asm::Reg::AX),
+                    src: asm::Operand::Stack(asm::Offset(-12)),
+                    dst: asm::Operand::Reg(asm::Reg::CX),
                 },
-                asm::Instruction::Cdq,
-                asm::Instruction::Idiv(asm::Operand::Imm(3)),
-                asm::Instruction::Mov {
-                    src: asm::Operand::Reg(asm::Reg::DX),
-                    dst: asm::Operand::Pseudo(asm::Identifier("tmp.0".into())),
+                asm::Instruction::Binary {
+                    op: asm::BinaryOperator::BitShiftLeft,
+                    src: asm::Operand::Reg(asm::Reg::CX),
+                    dst: asm::Operand::Stack(asm::Offset(-4)),
+                },
+                asm::Instruction::Binary {
+                    op: asm::BinaryOperator::BitShiftRight,
+                    src: asm::Operand::Imm(9),
+                    dst: asm::Operand::Stack(asm::Offset(-12)),
                 },
             ]
         );

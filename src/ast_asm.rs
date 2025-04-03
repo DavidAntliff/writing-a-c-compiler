@@ -110,6 +110,11 @@ pub(crate) enum BinaryOperator {
     Add,
     Sub,
     Mult,
+    BitAnd,
+    BitOr,
+    BitXor,
+    BitShiftLeft,
+    BitShiftRight,
 }
 
 impl Display for BinaryOperator {
@@ -118,6 +123,11 @@ impl Display for BinaryOperator {
             BinaryOperator::Add => write!(f, "addl"),
             BinaryOperator::Sub => write!(f, "subl"),
             BinaryOperator::Mult => write!(f, "imull"),
+            BinaryOperator::BitAnd => write!(f, "andl"),
+            BinaryOperator::BitOr => write!(f, "orl"),
+            BinaryOperator::BitXor => write!(f, "xorl"),
+            BinaryOperator::BitShiftLeft => write!(f, "sall"),
+            BinaryOperator::BitShiftRight => write!(f, "sarl"),
         }
     }
 }
@@ -145,15 +155,22 @@ impl Display for Operand {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Reg {
     AX,
+    CX,
     DX,
     R10,
     R11,
 }
 
+// TODO: we may need to ditch the Display trait and use
+// a different approach to emit the registers, as sometimes
+// we need to use the 64-bit registers (e.g. r10, r11) and
+// sometimes we need to use the 32-bit registers (e.g. eax, ecx, edx)
+
 impl Display for Reg {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Reg::AX => write!(f, "eax"),
+            Reg::CX => write!(f, "ecx"), // FIXME, this is sometimes cl!!
             Reg::DX => write!(f, "edx"),
             Reg::R10 => write!(f, "r10d"),
             Reg::R11 => write!(f, "r11d"),

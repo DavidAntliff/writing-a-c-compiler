@@ -324,6 +324,11 @@ fn binop(i: &mut Tokens<'_>) -> winnow::Result<BinaryOperator> {
             TokenKind::Multiply => Ok(BinaryOperator::Multiply),
             TokenKind::Divide => Ok(BinaryOperator::Divide),
             TokenKind::Remainder => Ok(BinaryOperator::Remainder),
+            TokenKind::BitwiseAnd => Ok(BinaryOperator::BitAnd),
+            TokenKind::BitwiseOr => Ok(BinaryOperator::BitOr),
+            TokenKind::BitwiseXor => Ok(BinaryOperator::BitXor),
+            TokenKind::BitwiseShiftLeft => Ok(BinaryOperator::ShiftLeft),
+            TokenKind::BitwiseShiftRight => Ok(BinaryOperator::ShiftRight),
             _ => Err(ParserError {
                 message: "Expected a binary operator".to_string(),
                 expected: "binary operator".to_string(),
@@ -490,6 +495,43 @@ mod tests {
                         BinaryOperator::Add,
                         Box::new(Expression::Constant(4)),
                         Box::new(Expression::Constant(5))
+                    ))
+                ))
+            )
+        );
+    }
+
+    #[test]
+    fn test_expression_bitwise_binary_operators() {
+        // 80 >> 2 | 1 ^ 5 & 7 << 1
+        // Equivalent to:
+        // (80 >> 2) | (1 ^ (5 & (7 << 1)))
+        crate::tests::init_logger();
+
+        let input = r#"80 >> 2 | 1 ^ 5 & 7 << 1"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let expression = exp.parse(tokens).expect("should parse");
+        assert_eq!(
+            expression,
+            Expression::Binary(
+                BinaryOperator::BitOr,
+                Box::new(Expression::Binary(
+                    BinaryOperator::ShiftRight,
+                    Box::new(Expression::Constant(80)),
+                    Box::new(Expression::Constant(2))
+                )),
+                Box::new(Expression::Binary(
+                    BinaryOperator::BitXor,
+                    Box::new(Expression::Constant(1)),
+                    Box::new(Expression::Binary(
+                        BinaryOperator::BitAnd,
+                        Box::new(Expression::Constant(5)),
+                        Box::new(Expression::Binary(
+                            BinaryOperator::ShiftLeft,
+                            Box::new(Expression::Constant(7)),
+                            Box::new(Expression::Constant(1))
+                        ))
                     ))
                 ))
             )
