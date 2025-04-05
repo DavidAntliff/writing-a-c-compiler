@@ -39,23 +39,32 @@ pub(crate) enum TokenKind {
     Keyword(Keyword),
     Identifier(Identifier),
     Constant(Constant),
-    OpenParen,         // (
-    CloseParen,        // )
-    OpenBrace,         // {
-    CloseBrace,        // }
-    Semicolon,         // ;
-    BitwiseComplement, // ~
-    Negation,          // -
-    Decrement,         // --
-    Add,               // +
-    Multiply,          // *
-    Divide,            // /
-    Remainder,         // %
-    BitwiseAnd,        // &
-    BitwiseOr,         // |
-    BitwiseXor,        // ^
-    BitwiseShiftLeft,  // <<
-    BitwiseShiftRight, // >>
+    OpenParen,          // (
+    CloseParen,         // )
+    OpenBrace,          // {
+    CloseBrace,         // }
+    Semicolon,          // ;
+    BitwiseComplement,  // ~
+    Negation,           // -
+    Decrement,          // --
+    Add,                // +
+    Multiply,           // *
+    Divide,             // /
+    Remainder,          // %
+    BitwiseAnd,         // &
+    BitwiseOr,          // |
+    BitwiseXor,         // ^
+    BitwiseShiftLeft,   // <<
+    BitwiseShiftRight,  // >>
+    LogicalNot,         // !
+    LogicalAnd,         // &&
+    LogicalOr,          // ||
+    Equal,              // ==
+    NotEqual,           // !=
+    LessThan,           // <
+    GreaterThan,        // >
+    LessThanOrEqual,    // <=
+    GreaterThanOrEqual, // >=
 }
 
 impl TokenKind {
@@ -72,6 +81,14 @@ impl TokenKind {
                 | TokenKind::BitwiseXor
                 | TokenKind::BitwiseShiftLeft
                 | TokenKind::BitwiseShiftRight
+                | TokenKind::LogicalAnd
+                | TokenKind::LogicalOr
+                | TokenKind::Equal
+                | TokenKind::NotEqual
+                | TokenKind::LessThan
+                | TokenKind::GreaterThan
+                | TokenKind::LessThanOrEqual
+                | TokenKind::GreaterThanOrEqual
         )
     }
 
@@ -116,54 +133,41 @@ fn tokens(input: &mut LocatingInput<'_>) -> winnow::Result<Vec<Token>> {
 
 fn token(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
     multispace0.parse_next(input)?;
+    // TODO: optimise with dispatch! / peek
     alt((
-        identifier,
-        constant,
-        open_paren,
-        close_paren,
-        open_brace,
-        close_brace,
-        semicolon,
-        bitwise_complement,
-        decrement,
-        negation,
-        // decrement,
-        "+".with_span().map(|(_, span)| Token {
-            kind: TokenKind::Add,
-            span,
-        }),
-        "*".with_span().map(|(_, span)| Token {
-            kind: TokenKind::Multiply,
-            span,
-        }),
-        "/".with_span().map(|(_, span)| Token {
-            kind: TokenKind::Divide,
-            span,
-        }),
-        "%".with_span().map(|(_, span)| Token {
-            kind: TokenKind::Remainder,
-            span,
-        }),
-        "&".with_span().map(|(_, span)| Token {
-            kind: TokenKind::BitwiseAnd,
-            span,
-        }),
-        "|".with_span().map(|(_, span)| Token {
-            kind: TokenKind::BitwiseOr,
-            span,
-        }),
-        "^".with_span().map(|(_, span)| Token {
-            kind: TokenKind::BitwiseXor,
-            span,
-        }),
-        "<<".with_span().map(|(_, span)| Token {
-            kind: TokenKind::BitwiseShiftLeft,
-            span,
-        }),
-        ">>".with_span().map(|(_, span)| Token {
-            kind: TokenKind::BitwiseShiftRight,
-            span,
-        }),
+        // longer tokens first
+        alt((
+            identifier,
+            constant,
+            decrement,
+            bitwise_shift_left,
+            bitwise_shift_right,
+            logical_and,
+            logical_or,
+            equal,
+            not_equal,
+            less_than_or_equal,
+            greater_than_or_equal,
+        )),
+        alt((
+            open_paren,
+            close_paren,
+            open_brace,
+            close_brace,
+            semicolon,
+            bitwise_complement,
+            negation,
+            add,
+            multiply,
+            divide,
+            remainder,
+            bitwise_and,
+            bitwise_or,
+            bitwise_xor,
+            logical_not,
+            less_than,
+            greater_than,
+        )),
     ))
     .parse_next(input)
 }
@@ -283,6 +287,168 @@ fn decrement(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
     "--".with_span()
         .map(|(_, span)| Token {
             kind: TokenKind::Decrement,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn add(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "+".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Add,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn multiply(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "*".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Multiply,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn divide(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "/".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Divide,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn remainder(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "%".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Remainder,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn bitwise_and(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "&".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::BitwiseAnd,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn bitwise_or(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "|".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::BitwiseOr,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn bitwise_xor(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "^".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::BitwiseXor,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn bitwise_shift_left(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "<<".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::BitwiseShiftLeft,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn bitwise_shift_right(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    ">>".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::BitwiseShiftRight,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn logical_not(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "!".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::LogicalNot,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn logical_and(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "&&".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::LogicalAnd,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn logical_or(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "||".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::LogicalOr,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn equal(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "==".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Equal,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn not_equal(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "!=".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::NotEqual,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn less_than(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "<".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::LessThan,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn greater_than(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    ">".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::GreaterThan,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn less_than_or_equal(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "<=".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::LessThanOrEqual,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn greater_than_or_equal(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    ">=".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::GreaterThanOrEqual,
             span,
         })
         .parse_next(input)
@@ -550,6 +716,13 @@ mod tests {
                 span: 0..2
             })
         );
+        assert_eq!(
+            token.parse(LocatingInput::new("!")),
+            Ok(Token {
+                kind: TokenKind::LogicalNot,
+                span: 0..1
+            })
+        );
     }
 
     #[test]
@@ -621,6 +794,70 @@ mod tests {
             token.parse(LocatingInput::new(">>")),
             Ok(Token {
                 kind: TokenKind::BitwiseShiftRight,
+                span: 0..2
+            })
+        );
+    }
+
+    #[test]
+    fn test_lex_logical_binary_operator() {
+        assert_eq!(
+            token.parse(LocatingInput::new("&&")),
+            Ok(Token {
+                kind: TokenKind::LogicalAnd,
+                span: 0..2
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("||")),
+            Ok(Token {
+                kind: TokenKind::LogicalOr,
+                span: 0..2
+            })
+        );
+    }
+
+    #[test]
+    fn test_lex_comparison_binary_operator() {
+        assert_eq!(
+            token.parse(LocatingInput::new("==")),
+            Ok(Token {
+                kind: TokenKind::Equal,
+                span: 0..2
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("!=")),
+            Ok(Token {
+                kind: TokenKind::NotEqual,
+                span: 0..2
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("<")),
+            Ok(Token {
+                kind: TokenKind::LessThan,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new(">")),
+            Ok(Token {
+                kind: TokenKind::GreaterThan,
+                span: 0..1
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new("<=")),
+            Ok(Token {
+                kind: TokenKind::LessThanOrEqual,
+                span: 0..2
+            })
+        );
+        assert_eq!(
+            token.parse(LocatingInput::new(">=")),
+            Ok(Token {
+                kind: TokenKind::GreaterThanOrEqual,
                 span: 0..2
             })
         );

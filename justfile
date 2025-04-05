@@ -1,4 +1,4 @@
-default: test ch1 ch2
+default: test ch1 ch2 ch3 ch4
 
 
 driver-test:
@@ -45,3 +45,8 @@ ch3:
     book-tests/test_compiler ./pcc.py --chapter 3 --stage tacky
     book-tests/test_compiler ./pcc.py --chapter 3 --stage codegen
     book-tests/test_compiler ./pcc.py --chapter 3 --bitwise
+
+
+ch4:
+    cargo build
+    book-tests/test_compiler ./pcc.py --chapter 4 --stage lex
