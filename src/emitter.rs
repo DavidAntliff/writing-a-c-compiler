@@ -112,10 +112,19 @@ mod tests {
         assert!(write_out(program, &mut writer).is_ok());
         let result = String::from_utf8(writer.into_inner().unwrap()).unwrap();
 
+        let main_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
+
+        let suffix = if cfg!(target_os = "linux") {
+            r#"\t.section\t.note.GNU-stack,"",@progbits"#
+        } else {
+            r#""#
+        };
+
         assert_eq!(
             result,
-            r#"	.globl	main
-main:
+            format!(
+                r#"	.globl	{main_prefix}main
+{main_prefix}main:
 	pushq	%rbp
 	movq	%rsp, %rbp
 	movl	%eax, $2
@@ -128,8 +137,8 @@ main:
 	movq	%rbp, %rsp
 	popq	%rbp
 	ret
-	.section	.note.GNU-stack,"",@progbits
-"#
+{suffix}"#
+            )
         )
     }
 }
