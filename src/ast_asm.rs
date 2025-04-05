@@ -81,6 +81,17 @@ impl Display for Instruction {
         match self {
             Instruction::Mov { src, dst } => write!(f, "movl\t{src}, {dst}"),
             Instruction::Unary { op, dst } => write!(f, "{op}\t{dst}"),
+            Instruction::Binary {
+                op,
+                src: Operand::Reg(r),
+                dst,
+            } if *op == BinaryOperator::BitShiftLeft || *op == BinaryOperator::BitShiftRight => {
+                write!(
+                    f,
+                    "{op}\t%{r}, {dst}",
+                    r = r.fmt_with_width(RegisterWidth::W8Low)
+                )
+            }
             Instruction::Binary { op, src, dst } => write!(f, "{op}\t{src}, {dst}"),
             Instruction::Idiv(src) => write!(f, "idivl\t{src}"),
             Instruction::Cdq => write!(f, "cdq"),
@@ -161,11 +172,6 @@ pub(crate) enum Reg {
     R11,
 }
 
-// TODO: we may need to ditch the Display trait and use
-// a different approach to emit the registers, as sometimes
-// we need to use the 64-bit registers (e.g. r10, r11) and
-// sometimes we need to use the 32-bit registers (e.g. eax, ecx, edx)
-
 impl Display for Reg {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -174,6 +180,57 @@ impl Display for Reg {
             Reg::DX => write!(f, "edx"),
             Reg::R10 => write!(f, "r10d"),
             Reg::R11 => write!(f, "r11d"),
+        }
+    }
+}
+
+#[allow(unused)]
+enum RegisterWidth {
+    W8Low,
+    W8High,
+    W16,
+    W32,
+    W64,
+}
+
+impl Reg {
+    fn base(&self) -> &str {
+        match self {
+            Reg::AX => "a",
+            Reg::CX => "c",
+            Reg::DX => "d",
+            Reg::R10 => "r10",
+            Reg::R11 => "r11",
+        }
+    }
+
+    fn extended(&self) -> bool {
+        match self {
+            Reg::AX => false,
+            Reg::CX => false,
+            Reg::DX => false,
+            Reg::R10 => true,
+            Reg::R11 => true,
+        }
+    }
+
+    fn fmt_with_width(&self, width: RegisterWidth) -> String {
+        if self.extended() {
+            match width {
+                RegisterWidth::W8Low => format!("{}b", self.base()),
+                RegisterWidth::W8High => panic!("{}h is not a valid register", self.base()),
+                RegisterWidth::W16 => format!("{}w", self.base()),
+                RegisterWidth::W32 => format!("{}d", self.base()),
+                RegisterWidth::W64 => self.base().to_string(),
+            }
+        } else {
+            match width {
+                RegisterWidth::W8Low => format!("{}l", self.base()),
+                RegisterWidth::W8High => format!("{}h", self.base()),
+                RegisterWidth::W16 => self.base().to_string(),
+                RegisterWidth::W32 => format!("e{}", self.base()),
+                RegisterWidth::W64 => format!("r{}", self.base()),
+            }
         }
     }
 }

@@ -103,6 +103,7 @@ def compile(filename: Path,
 
 def assemble_and_link(filename: Path):
     output_file = filename.with_suffix("")
+    #cmd = f"gcc -arch x86_64 {filename} -o {output_file}"
     cmd = f"gcc {filename} -o {output_file}"
     logger.debug(f"Assemble and link command: {cmd}")
     result = subprocess.run(cmd, shell=True, capture_output=True)

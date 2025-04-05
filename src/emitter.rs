@@ -99,6 +99,20 @@ mod tests {
                     },
                     Instruction::Idiv(Operand::Reg(Reg::R10)),
                     Instruction::Cdq,
+                    Instruction::Binary {
+                        op: BinaryOperator::BitShiftLeft,
+                        src: Operand::Imm(4),
+                        dst: Operand::Stack(Offset(-4)),
+                    },
+                    Instruction::Mov {
+                        src: Operand::Stack(Offset(-4)),
+                        dst: Operand::Reg(Reg::CX),
+                    },
+                    Instruction::Binary {
+                        op: BinaryOperator::BitShiftRight,
+                        src: Operand::Reg(Reg::CX),
+                        dst: Operand::Imm(42),
+                    },
                     Instruction::AllocateStack(4),
                     Instruction::Ret,
                 ],
@@ -133,6 +147,9 @@ mod tests {
 	imull	$42, %r10d
 	idivl	%r10d
 	cdq
+	sall	$4, -4(%rbp)
+	movl	-4(%rbp), %ecx
+	sarl	%cl, $42
 	subq	$4, %rsp
 	movq	%rbp, %rsp
 	popq	%rbp
