@@ -70,6 +70,7 @@ fn function_definition(function: &tacky::FunctionDefinition) -> asm::Function {
                 let op = match op {
                     tacky::UnaryOperator::Complement => asm::UnaryOperator::Not,
                     tacky::UnaryOperator::Negate => asm::UnaryOperator::Neg,
+                    tacky::UnaryOperator::Not => todo!(), //asm::UnaryOperator::Not,
                 };
                 instructions.push(asm::Instruction::Mov {
                     src,

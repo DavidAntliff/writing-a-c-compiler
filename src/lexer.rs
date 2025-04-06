@@ -94,16 +94,25 @@ impl TokenKind {
 
     fn precedence(&self) -> usize {
         match self {
-            TokenKind::Add => 45,
-            TokenKind::Negation => 45,
             TokenKind::Multiply => 50,
             TokenKind::Divide => 50,
             TokenKind::Remainder => 50,
-            TokenKind::BitwiseAnd => 35,
-            TokenKind::BitwiseOr => 25,
-            TokenKind::BitwiseXor => 30,
+            TokenKind::Add => 45,
+            TokenKind::Negation => 45,
             TokenKind::BitwiseShiftLeft => 40,
             TokenKind::BitwiseShiftRight => 40,
+            TokenKind::LessThan => 35,
+            TokenKind::GreaterThan => 35,
+            TokenKind::LessThanOrEqual => 35,
+            TokenKind::GreaterThanOrEqual => 35,
+            TokenKind::Equal => 30,
+            TokenKind::NotEqual => 30,
+            TokenKind::BitwiseAnd => 25,
+            TokenKind::BitwiseXor => 20,
+            TokenKind::BitwiseOr => 15,
+            TokenKind::LogicalAnd => 10,
+            TokenKind::LogicalOr => 5,
+
             _ => panic!("Unexpected token: {:?}", self),
         }
     }

@@ -6,8 +6,11 @@
 //!   <statement> ::= "return" <exp> ";"
 //!   <exp> := <factor> | <exp> <binop> <exp>
 //!   <factor> ::= <int> | <unop> <factor> | "(" <exp> ")"
-//!   <unop> ::= "-" | "~"
+//!   <unop> ::= "-" | "~" | "!"
 //!   <binop> ::= "-" | "+" | "-" | "*" | "/" | "%"
+//!               "&" | "|" | "^" | "<<" | ">>"
+//!               "&&" | "||" | "==" | "!="
+//!               "<" | "<=" | ">" | ">="
 //!   <identifier> ::= ? An identifier token ?
 //!   <int> ::= ? A constant token ?
 //!
@@ -232,7 +235,7 @@ fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
         let next_token: &Token = peek(any).parse_next(i)?;
         let exp = match next_token.kind {
             TokenKind::Constant(_) => Expression::Constant(int.parse_next(i)?),
-            TokenKind::BitwiseComplement | TokenKind::Negation => {
+            TokenKind::BitwiseComplement | TokenKind::Negation | TokenKind::LogicalNot => {
                 let op = unop.parse_next(i)?;
                 let inner_exp = factor.parse_next(i)?;
                 Expression::Unary(op, Box::new(inner_exp))
@@ -304,6 +307,7 @@ fn unop(i: &mut Tokens<'_>) -> winnow::Result<UnaryOperator> {
         .try_map(|t: &Token| match t.kind {
             TokenKind::BitwiseComplement => Ok(UnaryOperator::Complement),
             TokenKind::Negation => Ok(UnaryOperator::Negate),
+            TokenKind::LogicalNot => Ok(UnaryOperator::Not),
             _ => Err(ParserError {
                 message: "Expected a unary operator".to_string(),
                 expected: "unary operator".to_string(),
@@ -329,6 +333,14 @@ fn binop(i: &mut Tokens<'_>) -> winnow::Result<BinaryOperator> {
             TokenKind::BitwiseXor => Ok(BinaryOperator::BitXor),
             TokenKind::BitwiseShiftLeft => Ok(BinaryOperator::ShiftLeft),
             TokenKind::BitwiseShiftRight => Ok(BinaryOperator::ShiftRight),
+            TokenKind::LogicalAnd => Ok(BinaryOperator::And),
+            TokenKind::LogicalOr => Ok(BinaryOperator::Or),
+            TokenKind::Equal => Ok(BinaryOperator::Equal),
+            TokenKind::NotEqual => Ok(BinaryOperator::NotEqual),
+            TokenKind::LessThan => Ok(BinaryOperator::LessThan),
+            TokenKind::GreaterThan => Ok(BinaryOperator::GreaterThan),
+            TokenKind::LessThanOrEqual => Ok(BinaryOperator::LessOrEqual),
+            TokenKind::GreaterThanOrEqual => Ok(BinaryOperator::GreaterOrEqual),
             _ => Err(ParserError {
                 message: "Expected a binary operator".to_string(),
                 expected: "binary operator".to_string(),
@@ -536,5 +548,49 @@ mod tests {
                 ))
             )
         );
+    }
+
+    #[test]
+    fn test_expression_logical_binary_operators() {
+        // !(80 && 2 == 1 || 5 <= 7 && 2 > 1)
+        // Equivalent to:
+        // !((80 && (2 == 1)) || ((5 <= 7) && (2 > 1)))
+        crate::tests::init_logger();
+
+        let input = r#"!(80 && 2 == 1 || 5 <= 7 && 2 > 1)"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let expression = exp.parse(tokens).expect("should parse");
+        assert_eq!(
+            expression,
+            Expression::Unary(
+                UnaryOperator::Not,
+                Box::new(Expression::Binary(
+                    BinaryOperator::Or,
+                    Box::new(Expression::Binary(
+                        BinaryOperator::And,
+                        Box::new(Expression::Constant(80)),
+                        Box::new(Expression::Binary(
+                            BinaryOperator::Equal,
+                            Box::new(Expression::Constant(2)),
+                            Box::new(Expression::Constant(1))
+                        )),
+                    )),
+                    Box::new(Expression::Binary(
+                        BinaryOperator::And,
+                        Box::new(Expression::Binary(
+                            BinaryOperator::LessOrEqual,
+                            Box::new(Expression::Constant(5)),
+                            Box::new(Expression::Constant(7))
+                        )),
+                        Box::new(Expression::Binary(
+                            BinaryOperator::GreaterThan,
+                            Box::new(Expression::Constant(2)),
+                            Box::new(Expression::Constant(1))
+                        ))
+                    ))
+                ))
+            )
+        )
     }
 }

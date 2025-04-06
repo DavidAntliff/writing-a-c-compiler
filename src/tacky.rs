@@ -53,6 +53,7 @@ pub(crate) enum Val {
 pub(crate) enum UnaryOperator {
     Complement,
     Negate,
+    Not,
 }
 
 #[derive(Debug, PartialEq)]
@@ -67,6 +68,14 @@ pub(crate) enum BinaryOperator {
     BitXor,
     ShiftLeft,
     ShiftRight,
+    And,
+    Or,
+    Equal,
+    NotEqual,
+    LessThan,
+    GreaterThan,
+    LessOrEqual,
+    GreaterOrEqual,
 }
 
 #[derive(Debug, PartialEq, Error)]
@@ -146,6 +155,7 @@ fn convert_unop(op: &ast_c::UnaryOperator) -> UnaryOperator {
     match op {
         ast_c::UnaryOperator::Complement => UnaryOperator::Complement,
         ast_c::UnaryOperator::Negate => UnaryOperator::Negate,
+        ast_c::UnaryOperator::Not => UnaryOperator::Not,
     }
 }
 
@@ -161,6 +171,14 @@ fn convert_binop(op: &ast_c::BinaryOperator) -> BinaryOperator {
         ast_c::BinaryOperator::BitXor => BinaryOperator::BitXor,
         ast_c::BinaryOperator::ShiftLeft => BinaryOperator::ShiftLeft,
         ast_c::BinaryOperator::ShiftRight => BinaryOperator::ShiftRight,
+        ast_c::BinaryOperator::And => BinaryOperator::And,
+        ast_c::BinaryOperator::Or => BinaryOperator::Or,
+        ast_c::BinaryOperator::Equal => BinaryOperator::Equal,
+        ast_c::BinaryOperator::NotEqual => BinaryOperator::NotEqual,
+        ast_c::BinaryOperator::LessThan => BinaryOperator::LessThan,
+        ast_c::BinaryOperator::GreaterThan => BinaryOperator::GreaterThan,
+        ast_c::BinaryOperator::LessOrEqual => BinaryOperator::LessOrEqual,
+        ast_c::BinaryOperator::GreaterOrEqual => BinaryOperator::GreaterOrEqual,
     }
 }
 

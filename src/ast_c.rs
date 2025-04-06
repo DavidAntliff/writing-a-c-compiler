@@ -7,8 +7,11 @@
 //!   exp = Constant(int)
 //!       | Unary(unary_operator, exp)
 //!       | Binary(binary_operator, exp, exp)
-//!   unary_operator = Complement | Negate
+//!   unary_operator = Complement | Negate | Not
 //!   binary_operator = Add | Subtract | Multiply | Divide | Remainder
+//!                   | BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
+//!                   | And | Or | Equal | NotEqual | LessThan | GreaterThan
+//!                   | LessOrEqual | GreaterOrEqual
 //!
 
 use crate::lexer::Identifier;
@@ -40,6 +43,7 @@ pub(crate) enum Expression {
 pub(crate) enum UnaryOperator {
     Complement,
     Negate,
+    Not,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -54,4 +58,12 @@ pub(crate) enum BinaryOperator {
     BitXor,
     ShiftLeft,
     ShiftRight,
+    And,
+    Or,
+    Equal,
+    NotEqual,
+    LessThan,
+    GreaterThan,
+    LessOrEqual,
+    GreaterOrEqual,
 }
