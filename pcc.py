@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--parse", action="store_true", help="Run up to the parser only")
     parser.add_argument("--tacky", action="store_true", help="Run up to the tacky generation only")
     parser.add_argument("--codegen", action="store_true", help="Run up to codegen only")
+    parser.add_argument("-o", "--output", help="Path to the compiled binary (optional)", default=None)
     parser.add_argument("-S", "--asm", action="store_true", help="Generate assembly code")
 
     args = parser.parse_args()
@@ -42,7 +43,7 @@ def main():
 
     try:
         if not (args.lex or args.parse or args.tacky or args.codegen):
-            assemble_and_link(assembly_file)
+            assemble_and_link(assembly_file, args.output)
     finally:
         if not args.asm and assembly_file is not None:
             assembly_file.unlink(missing_ok=True)
@@ -101,8 +102,9 @@ def compile(filename: Path,
     return target
 
 
-def assemble_and_link(filename: Path):
-    output_file = filename.with_suffix("")
+def assemble_and_link(filename: Path, output_file: Path | None):
+    if output_file is None:
+        output_file = filename.with_suffix("")
     #cmd = f"gcc -arch x86_64 {filename} -o {output_file}"
     cmd = f"gcc {filename} -o {output_file}"
     logger.debug(f"Assemble and link command: {cmd}")

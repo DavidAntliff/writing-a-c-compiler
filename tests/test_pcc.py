@@ -45,4 +45,8 @@ def check_output(c_program: CProgram):
 
 @pytest.mark.parametrize("c_program_id", C_PROGRAMS.keys())
 def test_c_program(c_program_id):
-    check_output(C_PROGRAMS[c_program_id])
+    c_program = C_PROGRAMS[c_program_id]
+    try:
+        check_output(c_program)
+    finally:
+        Path(c_program.path.stem).unlink()

@@ -6,9 +6,16 @@
 //!   instruction = Return(val)
 //!               | Unary(unary_operator, val src, val dst)
 //!               | Binary(binary_operator, val src1, val src2, val dst)
+//!               | Copy(val src, val dst)
+//!               | Jump(identifier target)
+//!               | JumpIfZero(val condition, identifier target)
+//!               | JumpIfNotZero(val condition, identifier target)
+//!               | Label(identifier)
 //!   val = Constant(int) | Var(identifier)
-//!   unary_operator = Complement | Negate
+//!   unary_operator = Complement | Negate | Not
 //!   binary_operator = Add | Subtract | Multiply | Divide | Remainder
+//!                   | BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
+//!                   | Equal | NotEqual | LessThan | LessOrEqual | GreaterThan | GreaterOrEqual
 //!
 
 use crate::ast_c;
@@ -41,6 +48,22 @@ pub(crate) enum Instruction {
         src2: Val,
         dst: Val,
     },
+    Copy {
+        src: Val,
+        dst: Val,
+    },
+    Jump {
+        target: Identifier,
+    },
+    JumpIfZero {
+        condition: Val,
+        target: Identifier,
+    },
+    JumpIfNotZero {
+        condition: Val,
+        target: Identifier,
+    },
+    Label(Identifier),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -68,8 +91,8 @@ pub(crate) enum BinaryOperator {
     BitXor,
     ShiftLeft,
     ShiftRight,
-    And,
-    Or,
+    //And,
+    //Or,
     Equal,
     NotEqual,
     LessThan,
@@ -88,9 +111,9 @@ pub(crate) fn parse(program: &ast_c::Program) -> Result<Program, TackyError> {
     let name = program.function.name.clone();
 
     let mut body = vec![];
-    let mut temporary = TemporaryNamer::new();
+    let mut id_gen = IdGenerator::new();
 
-    let val = emit_statement(&program.function.body, &mut body, &mut temporary);
+    let val = emit_statement(&program.function.body, &mut body, &mut id_gen);
     body.push(val);
 
     let function_definition = FunctionDefinition { name, body };
@@ -100,32 +123,36 @@ pub(crate) fn parse(program: &ast_c::Program) -> Result<Program, TackyError> {
     })
 }
 
-struct TemporaryNamer {
+struct IdGenerator {
     next: usize,
 }
 
-impl TemporaryNamer {
+impl IdGenerator {
     fn new() -> Self {
-        TemporaryNamer { next: 0 }
+        IdGenerator { next: 0 }
     }
 
-    fn next(&mut self) -> String {
-        let name = format!("tmp.{}", self.next);
+    fn next(&mut self) -> usize {
+        let v = self.next;
         self.next += 1;
-        name
+        v
     }
+}
+
+fn next_var(id_gen: &mut IdGenerator) -> String {
+    format!("tmp.{}", id_gen.next())
 }
 
 fn emit_tacky(
     exp: &ast_c::Expression,
     instructions: &mut Vec<Instruction>,
-    temporary: &mut TemporaryNamer,
+    id_gen: &mut IdGenerator,
 ) -> Val {
     match exp {
         ast_c::Expression::Constant(c) => Val::Constant(*c),
         ast_c::Expression::Unary(op, inner) => {
-            let src = emit_tacky(inner, instructions, temporary);
-            let dst = Val::Var(temporary.next().to_string());
+            let src = emit_tacky(inner, instructions, id_gen);
+            let dst = Val::Var(next_var(id_gen));
             let tacky_op = convert_unop(op);
             instructions.push(Instruction::Unary {
                 op: tacky_op,
@@ -134,11 +161,77 @@ fn emit_tacky(
             });
             dst
         }
+
+        // Handle short-circuit evaluation for And / Or
+        ast_c::Expression::Binary(ast_c::BinaryOperator::And, e1, e2) => {
+            let id = id_gen.next();
+            let label_false = format!("and_false.{id}");
+            let label_end = format!("and_end.{id}");
+
+            let v1 = emit_tacky(e1, instructions, id_gen);
+            instructions.push(Instruction::JumpIfZero {
+                condition: v1.clone(),
+                target: label_false.clone(),
+            });
+            let v2 = emit_tacky(e2, instructions, id_gen);
+            instructions.push(Instruction::JumpIfZero {
+                condition: v2.clone(),
+                target: label_false.clone(),
+            });
+            let dst = Val::Var(next_var(id_gen));
+            instructions.push(Instruction::Copy {
+                src: Val::Constant(1),
+                dst: dst.clone(),
+            });
+            instructions.push(Instruction::Jump {
+                target: label_end.clone(),
+            });
+            instructions.push(Instruction::Label(label_false));
+            instructions.push(Instruction::Copy {
+                src: Val::Constant(0),
+                dst: dst.clone(),
+            });
+            instructions.push(Instruction::Label(label_end));
+            dst
+        }
+
+        ast_c::Expression::Binary(ast_c::BinaryOperator::Or, e1, e2) => {
+            let id = id_gen.next();
+            let label_true = format!("or_true.{id}");
+            let label_end = format!("or_end.{id}");
+
+            let v1 = emit_tacky(e1, instructions, id_gen);
+            instructions.push(Instruction::JumpIfNotZero {
+                condition: v1.clone(),
+                target: label_true.clone(),
+            });
+            let v2 = emit_tacky(e2, instructions, id_gen);
+            instructions.push(Instruction::JumpIfNotZero {
+                condition: v2.clone(),
+                target: label_true.clone(),
+            });
+            let dst = Val::Var(next_var(id_gen));
+            instructions.push(Instruction::Copy {
+                src: Val::Constant(0),
+                dst: dst.clone(),
+            });
+            instructions.push(Instruction::Jump {
+                target: label_end.clone(),
+            });
+            instructions.push(Instruction::Label(label_true));
+            instructions.push(Instruction::Copy {
+                src: Val::Constant(1),
+                dst: dst.clone(),
+            });
+            instructions.push(Instruction::Label(label_end));
+            dst
+        }
+
         ast_c::Expression::Binary(op, e1, e2) => {
             // Unsequenced - indeterminate order of evaluation
-            let src1 = emit_tacky(e1, instructions, temporary);
-            let src2 = emit_tacky(e2, instructions, temporary);
-            let dst = Val::Var(temporary.next().to_string());
+            let src1 = emit_tacky(e1, instructions, id_gen);
+            let src2 = emit_tacky(e2, instructions, id_gen);
+            let dst = Val::Var(next_var(id_gen));
             let tacky = convert_binop(op);
             instructions.push(Instruction::Binary {
                 op: tacky,
@@ -171,25 +264,26 @@ fn convert_binop(op: &ast_c::BinaryOperator) -> BinaryOperator {
         ast_c::BinaryOperator::BitXor => BinaryOperator::BitXor,
         ast_c::BinaryOperator::ShiftLeft => BinaryOperator::ShiftLeft,
         ast_c::BinaryOperator::ShiftRight => BinaryOperator::ShiftRight,
-        ast_c::BinaryOperator::And => BinaryOperator::And,
-        ast_c::BinaryOperator::Or => BinaryOperator::Or,
         ast_c::BinaryOperator::Equal => BinaryOperator::Equal,
         ast_c::BinaryOperator::NotEqual => BinaryOperator::NotEqual,
         ast_c::BinaryOperator::LessThan => BinaryOperator::LessThan,
         ast_c::BinaryOperator::GreaterThan => BinaryOperator::GreaterThan,
         ast_c::BinaryOperator::LessOrEqual => BinaryOperator::LessOrEqual,
         ast_c::BinaryOperator::GreaterOrEqual => BinaryOperator::GreaterOrEqual,
+        _ => {
+            panic!("Unsupported binary operator: {:?}", op);
+        }
     }
 }
 
 fn emit_statement(
     statement: &ast_c::Statement,
     instructions: &mut Vec<Instruction>,
-    temporary: &mut TemporaryNamer,
+    id_gen: &mut IdGenerator,
 ) -> Instruction {
     match statement {
         ast_c::Statement::Return(exp) => {
-            let val = emit_tacky(exp, instructions, temporary);
+            let val = emit_tacky(exp, instructions, id_gen);
             Instruction::Return(val)
         }
     }
@@ -198,16 +292,15 @@ fn emit_statement(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast_c::Expression;
 
     #[test]
     fn test_constant_expression() {
         let exp = ast_c::Expression::Constant(2);
         let mut instructions = vec![];
-        let mut temporary = TemporaryNamer::new();
+        let mut id_gen = IdGenerator::new();
 
         assert_eq!(
-            emit_tacky(&exp, &mut instructions, &mut temporary),
+            emit_tacky(&exp, &mut instructions, &mut id_gen),
             Val::Constant(2)
         );
         assert!(instructions.is_empty());
@@ -220,10 +313,10 @@ mod tests {
             Box::new(ast_c::Expression::Constant(2)),
         );
         let mut instructions = vec![];
-        let mut temporary = TemporaryNamer::new();
+        let mut id_gen = IdGenerator::new();
 
         assert_eq!(
-            emit_tacky(&exp, &mut instructions, &mut temporary),
+            emit_tacky(&exp, &mut instructions, &mut id_gen),
             Val::Var("tmp.0".into())
         );
         assert_eq!(
@@ -249,10 +342,10 @@ mod tests {
             )),
         );
         let mut instructions = vec![];
-        let mut temporary = TemporaryNamer::new();
+        let mut id_gen = IdGenerator::new();
 
         assert_eq!(
-            emit_tacky(&exp, &mut instructions, &mut temporary),
+            emit_tacky(&exp, &mut instructions, &mut id_gen),
             Val::Var("tmp.2".into())
         );
         assert_eq!(
@@ -281,10 +374,10 @@ mod tests {
     fn test_statement_return_constant() {
         let statement = ast_c::Statement::Return(ast_c::Expression::Constant(2));
         let mut instructions = vec![];
-        let mut temporary = TemporaryNamer::new();
+        let mut id_gen = IdGenerator::new();
 
         assert_eq!(
-            emit_statement(&statement, &mut instructions, &mut temporary),
+            emit_statement(&statement, &mut instructions, &mut id_gen),
             Instruction::Return(Val::Constant(2))
         );
         assert!(instructions.is_empty());
@@ -297,10 +390,10 @@ mod tests {
             Box::new(ast_c::Expression::Constant(2)),
         ));
         let mut instructions = vec![];
-        let mut temporary = TemporaryNamer::new();
+        let mut id_gen = IdGenerator::new();
 
         assert_eq!(
-            emit_statement(&statement, &mut instructions, &mut temporary),
+            emit_statement(&statement, &mut instructions, &mut id_gen),
             Instruction::Return(Val::Var("tmp.0".into()))
         );
         assert_eq!(
@@ -366,20 +459,20 @@ mod tests {
         let program = ast_c::Program {
             function: ast_c::Function {
                 name: "main".to_string(),
-                body: ast_c::Statement::Return(Expression::Binary(
+                body: ast_c::Statement::Return(ast_c::Expression::Binary(
                     ast_c::BinaryOperator::Subtract,
-                    Box::new(Expression::Binary(
+                    Box::new(ast_c::Expression::Binary(
                         ast_c::BinaryOperator::Multiply,
-                        Box::new(Expression::Constant(1)),
-                        Box::new(Expression::Constant(2)),
+                        Box::new(ast_c::Expression::Constant(1)),
+                        Box::new(ast_c::Expression::Constant(2)),
                     )),
-                    Box::new(Expression::Binary(
+                    Box::new(ast_c::Expression::Binary(
                         ast_c::BinaryOperator::Multiply,
-                        Box::new(Expression::Constant(3)),
-                        Box::new(Expression::Binary(
+                        Box::new(ast_c::Expression::Constant(3)),
+                        Box::new(ast_c::Expression::Binary(
                             ast_c::BinaryOperator::Add,
-                            Box::new(Expression::Constant(4)),
-                            Box::new(Expression::Constant(5)),
+                            Box::new(ast_c::Expression::Constant(4)),
+                            Box::new(ast_c::Expression::Constant(5)),
                         )),
                     )),
                 )),
@@ -420,6 +513,408 @@ mod tests {
                     ],
                 }
             }
+        );
+    }
+
+    fn do_emit_tacky(exp: &ast_c::Expression) -> (Val, Vec<Instruction>) {
+        let mut instructions = vec![];
+        let mut id_gen = IdGenerator::new();
+        let val = emit_tacky(exp, &mut instructions, &mut id_gen);
+        (val, instructions)
+    }
+
+    #[test]
+    fn test_emit_tacky_unary_not() {
+        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Unary(
+            ast_c::UnaryOperator::Not,
+            Box::new(ast_c::Expression::Constant(1)),
+        ));
+
+        assert_eq!(val, Val::Var("tmp.0".into()));
+        assert_eq!(
+            instructions,
+            vec![Instruction::Unary {
+                op: UnaryOperator::Not,
+                src: Val::Constant(1),
+                dst: Val::Var("tmp.0".into()),
+            },]
+        );
+    }
+
+    #[test]
+    fn test_emit_tacky_binary_and() {
+        // "e1 && e2" generates:
+        //   <instructions for e1>
+        //   v1 = <result of e1>
+        //   JumpIfZero(v1, false_label)
+        //   <instructions for e2>
+        //   v2 = <result of e2>
+        //   JumpIfZero(v2, false_label)
+        //   Copy(1, result)
+        //   Jump(end)
+        //   Label(false_label)
+        //   Copy(0, result)
+        //   Label(end)
+        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
+            ast_c::BinaryOperator::And,
+            Box::new(ast_c::Expression::Binary(
+                ast_c::BinaryOperator::Add,
+                Box::new(ast_c::Expression::Constant(1)),
+                Box::new(ast_c::Expression::Constant(2)),
+            )),
+            Box::new(ast_c::Expression::Constant(3)),
+        ));
+
+        assert_eq!(val, Val::Var("tmp.2".into()));
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Binary {
+                    op: BinaryOperator::Add,
+                    src1: Val::Constant(1),
+                    src2: Val::Constant(2),
+                    dst: Val::Var("tmp.1".into()), // v1
+                },
+                Instruction::JumpIfZero {
+                    condition: Val::Var("tmp.1".into()),
+                    target: "and_false.0".to_string(),
+                },
+                Instruction::JumpIfZero {
+                    condition: Val::Constant(3), // v2
+                    target: "and_false.0".to_string(),
+                },
+                Instruction::Copy {
+                    src: Val::Constant(1),
+                    dst: Val::Var("tmp.2".into()), // result
+                },
+                Instruction::Jump {
+                    target: "and_end.0".to_string(),
+                },
+                Instruction::Label("and_false.0".to_string()),
+                Instruction::Copy {
+                    src: Val::Constant(0),
+                    dst: Val::Var("tmp.2".into()), // result
+                },
+                Instruction::Label("and_end.0".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_emit_tacky_binary_or() {
+        // "e1 || e2" generates:
+        //   <instructions for e1>
+        //   v1 = <result of e1>
+        //   JumpIfNotZero(v1, true_label)
+        //   <instructions for e2>
+        //   v2 = <result of e2>
+        //   JumpIfNotZero(v2, true_label)
+        //   Copy(0, result)
+        //   Jump(end)
+        //   Label(true_label)
+        //   Copy(1, result)
+        //   Label(end)
+        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
+            ast_c::BinaryOperator::Or,
+            Box::new(ast_c::Expression::Binary(
+                ast_c::BinaryOperator::Add,
+                Box::new(ast_c::Expression::Constant(1)),
+                Box::new(ast_c::Expression::Constant(2)),
+            )),
+            Box::new(ast_c::Expression::Constant(3)),
+        ));
+
+        assert_eq!(val, Val::Var("tmp.2".into()));
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Binary {
+                    op: BinaryOperator::Add,
+                    src1: Val::Constant(1),
+                    src2: Val::Constant(2),
+                    dst: Val::Var("tmp.1".into()), // v1
+                },
+                Instruction::JumpIfNotZero {
+                    condition: Val::Var("tmp.1".into()),
+                    target: "or_true.0".to_string(),
+                },
+                Instruction::JumpIfNotZero {
+                    condition: Val::Constant(3), // v2
+                    target: "or_true.0".to_string(),
+                },
+                Instruction::Copy {
+                    src: Val::Constant(0),
+                    dst: Val::Var("tmp.2".into()), // result
+                },
+                Instruction::Jump {
+                    target: "or_end.0".to_string(),
+                },
+                Instruction::Label("or_true.0".to_string()),
+                Instruction::Copy {
+                    src: Val::Constant(1),
+                    dst: Val::Var("tmp.2".into()), // result
+                },
+                Instruction::Label("or_end.0".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_emit_tacky_binary_or_and() {
+        //   e1 || e2 && e3
+        // Equivalent to:
+        //   e1 || (e2 && e3)
+        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
+            ast_c::BinaryOperator::Or,
+            Box::new(ast_c::Expression::Constant(1)),
+            Box::new(ast_c::Expression::Binary(
+                ast_c::BinaryOperator::And,
+                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(3)),
+            )),
+        ));
+
+        assert_eq!(val, Val::Var("tmp.3".into()));
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::JumpIfNotZero {
+                    condition: Val::Constant(1), // OR v1
+                    target: "or_true.0".to_string(),
+                },
+                // AND
+                Instruction::JumpIfZero {
+                    condition: Val::Constant(2), // AND v1
+                    target: "and_false.1".to_string(),
+                },
+                Instruction::JumpIfZero {
+                    condition: Val::Constant(3), // AND v2
+                    target: "and_false.1".to_string(),
+                },
+                Instruction::Copy {
+                    src: Val::Constant(1),
+                    dst: Val::Var("tmp.2".into()), // AND result
+                },
+                Instruction::Jump {
+                    target: "and_end.1".to_string(),
+                },
+                Instruction::Label("and_false.1".to_string()),
+                Instruction::Copy {
+                    src: Val::Constant(0),
+                    dst: Val::Var("tmp.2".into()), // AND result
+                },
+                Instruction::Label("and_end.1".to_string()),
+                // back to OR
+                Instruction::JumpIfNotZero {
+                    condition: Val::Var("tmp.2".into()), // OR v2
+                    target: "or_true.0".to_string(),
+                },
+                Instruction::Copy {
+                    src: Val::Constant(0),
+                    dst: Val::Var("tmp.3".into()), // final result
+                },
+                Instruction::Jump {
+                    target: "or_end.0".to_string(),
+                },
+                Instruction::Label("or_true.0".to_string()),
+                Instruction::Copy {
+                    src: Val::Constant(1),
+                    dst: Val::Var("tmp.3".into()), // final result
+                },
+                Instruction::Label("or_end.0".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_emit_tacky_binary_equal() {
+        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
+            ast_c::BinaryOperator::Equal,
+            Box::new(ast_c::Expression::Binary(
+                ast_c::BinaryOperator::Add,
+                Box::new(ast_c::Expression::Constant(1)),
+                Box::new(ast_c::Expression::Constant(2)),
+            )),
+            Box::new(ast_c::Expression::Constant(3)),
+        ));
+
+        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Binary {
+                    op: BinaryOperator::Add,
+                    src1: Val::Constant(1),
+                    src2: Val::Constant(2),
+                    dst: Val::Var("tmp.0".into()),
+                },
+                Instruction::Binary {
+                    op: BinaryOperator::Equal,
+                    src1: Val::Var("tmp.0".into()),
+                    src2: Val::Constant(3),
+                    dst: Val::Var("tmp.1".into()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_emit_tacky_binary_not_equal() {
+        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
+            ast_c::BinaryOperator::NotEqual,
+            Box::new(ast_c::Expression::Binary(
+                ast_c::BinaryOperator::Add,
+                Box::new(ast_c::Expression::Constant(1)),
+                Box::new(ast_c::Expression::Constant(2)),
+            )),
+            Box::new(ast_c::Expression::Constant(3)),
+        ));
+
+        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Binary {
+                    op: BinaryOperator::Add,
+                    src1: Val::Constant(1),
+                    src2: Val::Constant(2),
+                    dst: Val::Var("tmp.0".into()),
+                },
+                Instruction::Binary {
+                    op: BinaryOperator::NotEqual,
+                    src1: Val::Var("tmp.0".into()),
+                    src2: Val::Constant(3),
+                    dst: Val::Var("tmp.1".into()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_emit_tacky_binary_less_than() {
+        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
+            ast_c::BinaryOperator::LessThan,
+            Box::new(ast_c::Expression::Binary(
+                ast_c::BinaryOperator::Add,
+                Box::new(ast_c::Expression::Constant(1)),
+                Box::new(ast_c::Expression::Constant(2)),
+            )),
+            Box::new(ast_c::Expression::Constant(3)),
+        ));
+
+        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Binary {
+                    op: BinaryOperator::Add,
+                    src1: Val::Constant(1),
+                    src2: Val::Constant(2),
+                    dst: Val::Var("tmp.0".into()),
+                },
+                Instruction::Binary {
+                    op: BinaryOperator::LessThan,
+                    src1: Val::Var("tmp.0".into()),
+                    src2: Val::Constant(3),
+                    dst: Val::Var("tmp.1".into()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_emit_tacky_binary_greater_than() {
+        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
+            ast_c::BinaryOperator::GreaterThan,
+            Box::new(ast_c::Expression::Binary(
+                ast_c::BinaryOperator::Add,
+                Box::new(ast_c::Expression::Constant(1)),
+                Box::new(ast_c::Expression::Constant(2)),
+            )),
+            Box::new(ast_c::Expression::Constant(3)),
+        ));
+
+        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Binary {
+                    op: BinaryOperator::Add,
+                    src1: Val::Constant(1),
+                    src2: Val::Constant(2),
+                    dst: Val::Var("tmp.0".into()),
+                },
+                Instruction::Binary {
+                    op: BinaryOperator::GreaterThan,
+                    src1: Val::Var("tmp.0".into()),
+                    src2: Val::Constant(3),
+                    dst: Val::Var("tmp.1".into()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_emit_tacky_binary_less_or_equal() {
+        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
+            ast_c::BinaryOperator::LessOrEqual,
+            Box::new(ast_c::Expression::Binary(
+                ast_c::BinaryOperator::Add,
+                Box::new(ast_c::Expression::Constant(1)),
+                Box::new(ast_c::Expression::Constant(2)),
+            )),
+            Box::new(ast_c::Expression::Constant(3)),
+        ));
+
+        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Binary {
+                    op: BinaryOperator::Add,
+                    src1: Val::Constant(1),
+                    src2: Val::Constant(2),
+                    dst: Val::Var("tmp.0".into()),
+                },
+                Instruction::Binary {
+                    op: BinaryOperator::LessOrEqual,
+                    src1: Val::Var("tmp.0".into()),
+                    src2: Val::Constant(3),
+                    dst: Val::Var("tmp.1".into()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_emit_tacky_binary_greater_or_equal() {
+        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
+            ast_c::BinaryOperator::GreaterOrEqual,
+            Box::new(ast_c::Expression::Binary(
+                ast_c::BinaryOperator::Add,
+                Box::new(ast_c::Expression::Constant(1)),
+                Box::new(ast_c::Expression::Constant(2)),
+            )),
+            Box::new(ast_c::Expression::Constant(3)),
+        ));
+
+        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(
+            instructions,
+            vec![
+                Instruction::Binary {
+                    op: BinaryOperator::Add,
+                    src1: Val::Constant(1),
+                    src2: Val::Constant(2),
+                    dst: Val::Var("tmp.0".into()),
+                },
+                Instruction::Binary {
+                    op: BinaryOperator::GreaterOrEqual,
+                    src1: Val::Var("tmp.0".into()),
+                    src2: Val::Constant(3),
+                    dst: Val::Var("tmp.1".into()),
+                },
+            ]
         );
     }
 }

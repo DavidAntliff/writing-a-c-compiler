@@ -126,6 +126,7 @@ fn function_definition(function: &tacky::FunctionDefinition) -> asm::Function {
                     });
                 }
             }
+            _ => panic!("Unsupported instruction: {instruction:?}"),
         });
 
     asm::Function {
