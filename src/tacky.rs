@@ -21,7 +21,18 @@
 use crate::ast_c;
 use thiserror::Error;
 
-pub(crate) type Identifier = String;
+//pub(crate) type Identifier = String;
+#[derive(Debug, PartialEq, Clone, Hash, Eq)]
+pub(crate) struct Identifier(pub(crate) String);
+
+impl<T> From<T> for Identifier
+where
+    T: Into<String>,
+{
+    fn from(value: T) -> Self {
+        Identifier(value.into())
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Program {
@@ -108,7 +119,7 @@ pub struct TackyError {
 }
 
 pub(crate) fn parse(program: &ast_c::Program) -> Result<Program, TackyError> {
-    let name = program.function.name.clone();
+    let name: Identifier = (&program.function.name).into();
 
     let mut body = vec![];
     let mut id_gen = IdGenerator::new();
@@ -139,8 +150,8 @@ impl IdGenerator {
     }
 }
 
-fn next_var(id_gen: &mut IdGenerator) -> String {
-    format!("tmp.{}", id_gen.next())
+fn next_var(id_gen: &mut IdGenerator) -> Identifier {
+    format!("tmp.{}", id_gen.next()).into()
 }
 
 fn emit_tacky(
@@ -165,8 +176,8 @@ fn emit_tacky(
         // Handle short-circuit evaluation for And / Or
         ast_c::Expression::Binary(ast_c::BinaryOperator::And, e1, e2) => {
             let id = id_gen.next();
-            let label_false = format!("and_false.{id}");
-            let label_end = format!("and_end.{id}");
+            let label_false: Identifier = format!("and_false.{id}").into();
+            let label_end: Identifier = format!("and_end.{id}").into();
 
             let v1 = emit_tacky(e1, instructions, id_gen);
             instructions.push(Instruction::JumpIfZero {
@@ -197,8 +208,8 @@ fn emit_tacky(
 
         ast_c::Expression::Binary(ast_c::BinaryOperator::Or, e1, e2) => {
             let id = id_gen.next();
-            let label_true = format!("or_true.{id}");
-            let label_end = format!("or_end.{id}");
+            let label_true: Identifier = format!("or_true.{id}").into();
+            let label_end: Identifier = format!("or_end.{id}").into();
 
             let v1 = emit_tacky(e1, instructions, id_gen);
             instructions.push(Instruction::JumpIfNotZero {
@@ -411,7 +422,7 @@ mod tests {
         // int main(void) { return -(~(-8)); }
         let program = ast_c::Program {
             function: ast_c::Function {
-                name: "main".to_string(),
+                name: "main".into(),
                 body: ast_c::Statement::Return(ast_c::Expression::Unary(
                     ast_c::UnaryOperator::Negate,
                     Box::new(ast_c::Expression::Unary(
@@ -429,7 +440,7 @@ mod tests {
             parse(&program).unwrap(),
             Program {
                 function_definition: FunctionDefinition {
-                    name: "main".to_string(),
+                    name: "main".into(),
                     body: vec![
                         Instruction::Unary {
                             op: UnaryOperator::Negate,
@@ -458,7 +469,7 @@ mod tests {
         // int main(void) { return 1 * 2 - 3 * (4 + 5); }   // -25
         let program = ast_c::Program {
             function: ast_c::Function {
-                name: "main".to_string(),
+                name: "main".into(),
                 body: ast_c::Statement::Return(ast_c::Expression::Binary(
                     ast_c::BinaryOperator::Subtract,
                     Box::new(ast_c::Expression::Binary(
@@ -483,7 +494,7 @@ mod tests {
             parse(&program).unwrap(),
             Program {
                 function_definition: FunctionDefinition {
-                    name: "main".to_string(),
+                    name: "main".into(),
                     body: vec![
                         Instruction::Binary {
                             op: BinaryOperator::Multiply,
@@ -577,25 +588,25 @@ mod tests {
                 },
                 Instruction::JumpIfZero {
                     condition: Val::Var("tmp.1".into()),
-                    target: "and_false.0".to_string(),
+                    target: "and_false.0".into(),
                 },
                 Instruction::JumpIfZero {
                     condition: Val::Constant(3), // v2
-                    target: "and_false.0".to_string(),
+                    target: "and_false.0".into(),
                 },
                 Instruction::Copy {
                     src: Val::Constant(1),
                     dst: Val::Var("tmp.2".into()), // result
                 },
                 Instruction::Jump {
-                    target: "and_end.0".to_string(),
+                    target: "and_end.0".into(),
                 },
-                Instruction::Label("and_false.0".to_string()),
+                Instruction::Label("and_false.0".into()),
                 Instruction::Copy {
                     src: Val::Constant(0),
                     dst: Val::Var("tmp.2".into()), // result
                 },
-                Instruction::Label("and_end.0".to_string()),
+                Instruction::Label("and_end.0".into()),
             ]
         );
     }
@@ -636,25 +647,25 @@ mod tests {
                 },
                 Instruction::JumpIfNotZero {
                     condition: Val::Var("tmp.1".into()),
-                    target: "or_true.0".to_string(),
+                    target: "or_true.0".into(),
                 },
                 Instruction::JumpIfNotZero {
                     condition: Val::Constant(3), // v2
-                    target: "or_true.0".to_string(),
+                    target: "or_true.0".into(),
                 },
                 Instruction::Copy {
                     src: Val::Constant(0),
                     dst: Val::Var("tmp.2".into()), // result
                 },
                 Instruction::Jump {
-                    target: "or_end.0".to_string(),
+                    target: "or_end.0".into(),
                 },
-                Instruction::Label("or_true.0".to_string()),
+                Instruction::Label("or_true.0".into()),
                 Instruction::Copy {
                     src: Val::Constant(1),
                     dst: Val::Var("tmp.2".into()), // result
                 },
-                Instruction::Label("or_end.0".to_string()),
+                Instruction::Label("or_end.0".into()),
             ]
         );
     }
@@ -680,48 +691,48 @@ mod tests {
             vec![
                 Instruction::JumpIfNotZero {
                     condition: Val::Constant(1), // OR v1
-                    target: "or_true.0".to_string(),
+                    target: "or_true.0".into(),
                 },
                 // AND
                 Instruction::JumpIfZero {
                     condition: Val::Constant(2), // AND v1
-                    target: "and_false.1".to_string(),
+                    target: "and_false.1".into(),
                 },
                 Instruction::JumpIfZero {
                     condition: Val::Constant(3), // AND v2
-                    target: "and_false.1".to_string(),
+                    target: "and_false.1".into(),
                 },
                 Instruction::Copy {
                     src: Val::Constant(1),
                     dst: Val::Var("tmp.2".into()), // AND result
                 },
                 Instruction::Jump {
-                    target: "and_end.1".to_string(),
+                    target: "and_end.1".into(),
                 },
-                Instruction::Label("and_false.1".to_string()),
+                Instruction::Label("and_false.1".into()),
                 Instruction::Copy {
                     src: Val::Constant(0),
                     dst: Val::Var("tmp.2".into()), // AND result
                 },
-                Instruction::Label("and_end.1".to_string()),
+                Instruction::Label("and_end.1".into()),
                 // back to OR
                 Instruction::JumpIfNotZero {
                     condition: Val::Var("tmp.2".into()), // OR v2
-                    target: "or_true.0".to_string(),
+                    target: "or_true.0".into(),
                 },
                 Instruction::Copy {
                     src: Val::Constant(0),
                     dst: Val::Var("tmp.3".into()), // final result
                 },
                 Instruction::Jump {
-                    target: "or_end.0".to_string(),
+                    target: "or_end.0".into(),
                 },
-                Instruction::Label("or_true.0".to_string()),
+                Instruction::Label("or_true.0".into()),
                 Instruction::Copy {
                     src: Val::Constant(1),
                     dst: Val::Var("tmp.3".into()), // final result
                 },
-                Instruction::Label("or_end.0".to_string()),
+                Instruction::Label("or_end.0".into()),
             ]
         );
     }

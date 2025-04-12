@@ -60,4 +60,5 @@ ch4:
     cargo build
     #book-tests/test_compiler ./pcc.py --chapter 4 --stage lex
     #book-tests/test_compiler ./pcc.py --chapter 4 --stage parse
-    book-tests/test_compiler ./pcc.py --chapter 4 --stage tacky
+    #book-tests/test_compiler ./pcc.py --chapter 4 --stage tacky
+    book-tests/test_compiler ./pcc.py --chapter 4 --stage codegen

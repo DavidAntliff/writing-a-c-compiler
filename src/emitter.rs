@@ -69,7 +69,7 @@ fn write_out<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast_asm::{BinaryOperator, Function, Identifier, Offset, Program, Reg};
+    use crate::ast_asm::{BinaryOperator, Function, Offset, Program, Reg};
     use crate::ast_asm::{Operand, UnaryOperator};
     use pretty_assertions::assert_eq;
 
@@ -77,7 +77,7 @@ mod tests {
     fn test_emit_instructions() {
         let program = Program {
             function_definition: Function {
-                name: Identifier("main".to_string()),
+                name: "main".into(),
                 instructions: vec![
                     Instruction::Mov {
                         src: Operand::Reg(Reg::AX),

@@ -143,7 +143,7 @@ mod tests {
             lex_and_parse(input).unwrap(),
             Program {
                 function: Function {
-                    name: "main".to_string(),
+                    name: "main".into(),
                     body: Statement::Return(Expression::Constant(2)),
                 }
             }
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_codegen() {
-        use ast_asm::{Function, Identifier, Instruction, Operand, Program};
+        use ast_asm::{Function, Instruction, Operand, Program};
         // Listing on page 4, AST on page 13
         let input = r#"
         int main(void) {
@@ -229,7 +229,7 @@ mod tests {
             lex_parse_and_codegen(input).unwrap(),
             Program {
                 function_definition: Function {
-                    name: Identifier("main".to_string()),
+                    name: "main".into(),
                     instructions: vec![
                         Instruction::AllocateStack(0),
                         Instruction::Mov {

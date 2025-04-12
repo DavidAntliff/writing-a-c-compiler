@@ -6,8 +6,13 @@
 //!   instruction = Mov(operand src, operand dst)
 //!               | Unary(unary_operator, operand)
 //!               | Binary(binary_operator, operand, operand)
+//!               | Cmp(operand, operand)
 //!               | Idiv(operand)
 //!               | Cdq
+//!               | Jmp(identifier)
+//!               | JmpCC(cond_code, identifier)
+//!               | SetCC(cond_code, operand)
+//!               | Label(identifier)
 //!               | AllocateStack(int)
 //!               | Ret
 //!   unary_operator = Neg | Not
@@ -16,6 +21,7 @@
 //!           | Reg(reg)
 //!           | Pseudo(identifier)
 //!           | Stack(int)
+//!   cond_code = E | NE | L | LE | G | GE
 //!   reg = AX | DX | R10 | R11
 //!
 //!
@@ -45,6 +51,15 @@ pub(crate) struct Function {
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
 pub(crate) struct Identifier(pub(crate) String);
 
+impl<T> From<T> for Identifier
+where
+    T: Into<String>,
+{
+    fn from(value: T) -> Self {
+        Identifier(value.into())
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Copy, Hash, Eq)]
 pub(crate) struct Offset(pub(crate) isize);
 
@@ -69,8 +84,24 @@ pub(crate) enum Instruction {
         src: Operand,
         dst: Operand,
     },
+    Cmp {
+        src1: Operand,
+        src2: Operand,
+    },
     Idiv(Operand),
     Cdq,
+    Jmp {
+        target: Identifier,
+    },
+    JmpCC {
+        cc: ConditionCode,
+        target: Identifier,
+    },
+    SetCC {
+        cc: ConditionCode,
+        dst: Operand,
+    },
+    Label(Identifier),
     /// Allocate stack space in bytes
     AllocateStack(usize),
     Ret,
@@ -95,6 +126,11 @@ impl Display for Instruction {
             Instruction::Binary { op, src, dst } => write!(f, "{op}\t{src}, {dst}"),
             Instruction::Idiv(src) => write!(f, "idivl\t{src}"),
             Instruction::Cdq => write!(f, "cdq"),
+            Instruction::Cmp { .. } => todo!(),
+            Instruction::Jmp { .. } => todo!(),
+            Instruction::JmpCC { .. } => todo!(),
+            Instruction::SetCC { .. } => todo!(),
+            Instruction::Label(_) => todo!(),
             Instruction::AllocateStack(size) => write!(f, "subq\t${size}, %rsp"),
             Instruction::Ret => write!(f, "ret"),
         }
@@ -233,4 +269,14 @@ impl Reg {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ConditionCode {
+    Equal,
+    NotEqual,
+    LessThan,
+    LessOrEqual,
+    GreaterThan,
+    GreaterOrEqual,
 }
