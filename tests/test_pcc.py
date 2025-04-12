@@ -15,6 +15,7 @@ class CProgram:
 C_PROGRAMS = {
     "return_2": CProgram(Path("tests/c/return_2.c"), 2),
     "return_1+2": CProgram(Path("tests/c/return_1+2.c"), 3),
+    "return_logical_ops": CProgram(Path("tests/c/return_logical_ops.c"), 1),
 }
 
 

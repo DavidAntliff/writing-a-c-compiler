@@ -5,6 +5,11 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use thiserror::Error;
 
+#[cfg(target_os = "linux")]
+pub(crate) const LABEL_PREFIX: &str = ".L";
+#[cfg(target_os = "macos")]
+pub(crate) const LABEL_PREFIX: &str = "L";
+
 #[derive(Debug, PartialEq, Error)]
 #[error("{message}")]
 pub struct EmitterError {
@@ -54,7 +59,10 @@ fn write_out<W: Write>(
             writeln!(writer, "{indent}movq\t%rbp, %rsp")?;
             writeln!(writer, "{indent}popq\t%rbp")?;
         }
-        writeln!(writer, "{indent}{instruction}")?;
+        if !matches!(instruction, Instruction::Label(_)) {
+            write!(writer, "{indent}")?;
+        }
+        writeln!(writer, "{instruction}")?;
     }
 
     if cfg!(target_os = "linux") {
@@ -71,6 +79,7 @@ mod tests {
     use super::*;
     use crate::ast_asm::{BinaryOperator, Function, Offset, Program, Reg};
     use crate::ast_asm::{Operand, UnaryOperator};
+    use crate::emitter::LABEL_PREFIX;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -113,6 +122,23 @@ mod tests {
                         src: Operand::Reg(Reg::CX),
                         dst: Operand::Imm(42),
                     },
+                    Instruction::Cmp {
+                        src1: Operand::Imm(2),
+                        src2: Operand::Reg(Reg::R11),
+                    },
+                    Instruction::Jmp {
+                        target: "label1".into(),
+                    },
+                    Instruction::JmpCC {
+                        cc: ast_asm::ConditionCode::GreaterOrEqual,
+                        target: "label2".into(),
+                    },
+                    Instruction::Label("label1".into()),
+                    Instruction::SetCC {
+                        cc: ast_asm::ConditionCode::NotEqual,
+                        dst: Operand::Reg(Reg::R11),
+                    },
+                    Instruction::Label("label2".into()),
                     Instruction::AllocateStack(4),
                     Instruction::Ret,
                 ],
@@ -150,6 +176,12 @@ mod tests {
 	sall	$4, -4(%rbp)
 	movl	-4(%rbp), %ecx
 	sarl	%cl, $42
+	cmpl	$2, %r11d
+	jmp	{LABEL_PREFIX}label1
+	jge	{LABEL_PREFIX}label2
+{LABEL_PREFIX}label1:
+	setne	%r11b
+{LABEL_PREFIX}label2:
 	subq	$4, %rsp
 	movq	%rbp, %rsp
 	popq	%rbp

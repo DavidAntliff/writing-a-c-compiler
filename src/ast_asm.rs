@@ -33,6 +33,7 @@
 //!   R11: scratch
 //!
 
+use crate::emitter::LABEL_PREFIX;
 use std::fmt::{Display, Formatter};
 
 pub(crate) const STACK_SLOT_SIZE: usize = 4; // 4 bytes per temporary variable
@@ -50,6 +51,12 @@ pub(crate) struct Function {
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
 pub(crate) struct Identifier(pub(crate) String);
+
+impl Display for Identifier {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{LABEL_PREFIX}{}", self.0)
+    }
+}
 
 impl<T> From<T> for Identifier
 where
@@ -126,11 +133,19 @@ impl Display for Instruction {
             Instruction::Binary { op, src, dst } => write!(f, "{op}\t{src}, {dst}"),
             Instruction::Idiv(src) => write!(f, "idivl\t{src}"),
             Instruction::Cdq => write!(f, "cdq"),
-            Instruction::Cmp { .. } => todo!(),
-            Instruction::Jmp { .. } => todo!(),
-            Instruction::JmpCC { .. } => todo!(),
-            Instruction::SetCC { .. } => todo!(),
-            Instruction::Label(_) => todo!(),
+            Instruction::Cmp { src1, src2 } => write!(f, "cmpl\t{src1}, {src2}"),
+            Instruction::Jmp { target } => write!(f, "jmp\t{target}"),
+            Instruction::JmpCC { cc, target } => write!(f, "j{cc}\t{target}"),
+            Instruction::SetCC { cc, dst } => match dst {
+                Operand::Reg(r) => write!(
+                    f,
+                    "set{cc}\t%{r}",
+                    r = r.fmt_with_width(RegisterWidth::W8Low)
+                ),
+                Operand::Stack(offset) => write!(f, "set{cc}\t{offset}(%rbp)"),
+                _ => panic!("Invalid operand for SetCC"),
+            },
+            Instruction::Label(label) => write!(f, "{label}:"),
             Instruction::AllocateStack(size) => write!(f, "subq\t${size}, %rsp"),
             Instruction::Ret => write!(f, "ret"),
         }
@@ -279,4 +294,17 @@ pub(crate) enum ConditionCode {
     LessOrEqual,
     GreaterThan,
     GreaterOrEqual,
+}
+
+impl Display for ConditionCode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConditionCode::Equal => write!(f, "e"),
+            ConditionCode::NotEqual => write!(f, "ne"),
+            ConditionCode::LessThan => write!(f, "l"),
+            ConditionCode::LessOrEqual => write!(f, "le"),
+            ConditionCode::GreaterThan => write!(f, "g"),
+            ConditionCode::GreaterOrEqual => write!(f, "ge"),
+        }
+    }
 }
