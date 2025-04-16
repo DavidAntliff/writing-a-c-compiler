@@ -19,6 +19,7 @@
 //!
 
 use crate::ast_c;
+use crate::ast_c::Statement;
 use thiserror::Error;
 
 //pub(crate) type Identifier = String;
@@ -124,8 +125,18 @@ pub(crate) fn parse(program: &ast_c::Program) -> Result<Program, TackyError> {
     let mut body = vec![];
     let mut id_gen = IdGenerator::new();
 
-    let val = emit_statement(&program.function.body, &mut body, &mut id_gen);
-    body.push(val);
+    for block_item in &program.function.body {
+        match block_item {
+            ast_c::BlockItem::S(statement) => {
+                let val = emit_statement(statement, &mut body, &mut id_gen);
+                body.push(val);
+            }
+            ast_c::BlockItem::D(_) => {
+                // Ignore declarations for now
+                todo!()
+            }
+        }
+    }
 
     let function_definition = FunctionDefinition { name, body };
 
@@ -161,6 +172,9 @@ fn emit_tacky(
 ) -> Val {
     match exp {
         ast_c::Expression::Constant(c) => Val::Constant(*c),
+
+        ast_c::Expression::Var(_) => todo!(),
+
         ast_c::Expression::Unary(op, inner) => {
             let src = emit_tacky(inner, instructions, id_gen);
             let dst = Val::Var(next_var(id_gen));
@@ -252,6 +266,11 @@ fn emit_tacky(
             });
             dst
         }
+
+        ast_c::Expression::Assignment(_, _) => {
+            // Handle assignment
+            todo!()
+        }
     }
 }
 
@@ -296,6 +315,12 @@ fn emit_statement(
         ast_c::Statement::Return(exp) => {
             let val = emit_tacky(exp, instructions, id_gen);
             Instruction::Return(val)
+        }
+        Statement::Expression(_) => {
+            todo!()
+        }
+        Statement::Null => {
+            todo!()
         }
     }
 }
@@ -423,16 +448,18 @@ mod tests {
         let program = ast_c::Program {
             function: ast_c::Function {
                 name: "main".into(),
-                body: ast_c::Statement::Return(ast_c::Expression::Unary(
-                    ast_c::UnaryOperator::Negate,
-                    Box::new(ast_c::Expression::Unary(
-                        ast_c::UnaryOperator::Complement,
+                body: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
+                    ast_c::Expression::Unary(
+                        ast_c::UnaryOperator::Negate,
                         Box::new(ast_c::Expression::Unary(
-                            ast_c::UnaryOperator::Negate,
-                            Box::new(ast_c::Expression::Constant(8)),
+                            ast_c::UnaryOperator::Complement,
+                            Box::new(ast_c::Expression::Unary(
+                                ast_c::UnaryOperator::Negate,
+                                Box::new(ast_c::Expression::Constant(8)),
+                            )),
                         )),
-                    )),
-                )),
+                    ),
+                ))],
             },
         };
 
@@ -470,23 +497,25 @@ mod tests {
         let program = ast_c::Program {
             function: ast_c::Function {
                 name: "main".into(),
-                body: ast_c::Statement::Return(ast_c::Expression::Binary(
-                    ast_c::BinaryOperator::Subtract,
-                    Box::new(ast_c::Expression::Binary(
-                        ast_c::BinaryOperator::Multiply,
-                        Box::new(ast_c::Expression::Constant(1)),
-                        Box::new(ast_c::Expression::Constant(2)),
-                    )),
-                    Box::new(ast_c::Expression::Binary(
-                        ast_c::BinaryOperator::Multiply,
-                        Box::new(ast_c::Expression::Constant(3)),
+                body: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
+                    ast_c::Expression::Binary(
+                        ast_c::BinaryOperator::Subtract,
                         Box::new(ast_c::Expression::Binary(
-                            ast_c::BinaryOperator::Add,
-                            Box::new(ast_c::Expression::Constant(4)),
-                            Box::new(ast_c::Expression::Constant(5)),
+                            ast_c::BinaryOperator::Multiply,
+                            Box::new(ast_c::Expression::Constant(1)),
+                            Box::new(ast_c::Expression::Constant(2)),
                         )),
-                    )),
-                )),
+                        Box::new(ast_c::Expression::Binary(
+                            ast_c::BinaryOperator::Multiply,
+                            Box::new(ast_c::Expression::Constant(3)),
+                            Box::new(ast_c::Expression::Binary(
+                                ast_c::BinaryOperator::Add,
+                                Box::new(ast_c::Expression::Constant(4)),
+                                Box::new(ast_c::Expression::Constant(5)),
+                            )),
+                        )),
+                    ),
+                ))],
             },
         };
 

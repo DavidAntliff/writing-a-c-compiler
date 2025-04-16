@@ -115,7 +115,7 @@ fn lex_parse_and_codegen(input: &str) -> Result<ast_asm::Program, Error> {
 mod tests {
     use super::*;
 
-    use crate::ast_c::{Expression, Function, Program, Statement};
+    use crate::ast_c::{BlockItem, Expression, Function, Program, Statement};
     use crate::parser::ParserError;
     use assert_matches::assert_matches;
 
@@ -144,7 +144,7 @@ mod tests {
             Program {
                 function: Function {
                     name: "main".into(),
-                    body: Statement::Return(Expression::Constant(2)),
+                    body: vec![BlockItem::S(Statement::Return(Expression::Constant(2)))],
                 }
             }
         );

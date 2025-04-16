@@ -2,10 +2,12 @@
 //!
 //! Grammar:
 //!   <program> ::= <function>
-//!   <function> ::= "int" <identifier> "(" "void" ")" "{" <statement> "}"
-//!   <statement> ::= "return" <exp> ";"
+//!   <function> ::= "int" <identifier> "(" "void" ")" "{" { <block-item> } "}"
+//!   <block-item> ::= <statement> | <declaration>
+//!   <declaration> ::= "int" <identifier> [ "=" <exp> ] ";"
+//!   <statement> ::= "return" <exp> ";" | <exp> ";" | ";"
 //!   <exp> := <factor> | <exp> <binop> <exp>
-//!   <factor> ::= <int> | <unop> <factor> | "(" <exp> ")"
+//!   <factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")"
 //!   <unop> ::= "-" | "~" | "!"
 //!   <binop> ::= "-" | "+" | "-" | "*" | "/" | "%"
 //!               "&" | "|" | "^" | "<<" | ">>"
@@ -15,10 +17,13 @@
 //!   <int> ::= ? A constant token ?
 //!
 
-use crate::ast_c::{BinaryOperator, Expression, Function, Program, Statement, UnaryOperator};
+use crate::ast_c::{
+    BinaryOperator, BlockItem, Declaration, Expression, Function, Program, Statement, UnaryOperator,
+};
 use crate::lexer::{Keyword, Token, TokenKind};
 use thiserror::Error;
-use winnow::combinator::{fail, peek, trace};
+use winnow::combinator::{fail, peek, repeat, repeat_till, terminated, trace};
+use winnow::dispatch;
 use winnow::error::{StrContext, StrContextValue};
 use winnow::prelude::*;
 use winnow::stream::TokenSlice;
@@ -39,14 +44,23 @@ impl ParserError {
         error: winnow::error::ParseError<TokenSlice<'_, Token>, winnow::error::ContextError>,
     ) -> Self {
         let context = error.inner().context();
+
+        // Use the first context that is a label
+        // let label = context
+        //     .find(|c| matches!(c, StrContext::Label(_)))
+        //     .unwrap_or(&StrContext::Label("unknown"));
+
+        // Use the Expected entries after the first label, until the next label
         let expected = context
+            .skip_while(|c| matches!(c, StrContext::Label(_)))
+            .take_while(|c| matches!(c, StrContext::Expected(_)))
             .filter_map(|c| match c {
                 StrContext::Expected(e) => Some(e.to_string()),
                 _ => None,
             })
             .collect::<Vec<_>>();
 
-        let expected = expected.first().cloned().unwrap_or("unknown".to_string());
+        let expected = expected.join(", ");
 
         let found = error
             .input()
@@ -76,8 +90,8 @@ impl ParserError {
 
         ParserError {
             message: format!("Expected {}, found {:?}", expected, found,),
-            expected: expected.clone(),
-            found: found.clone(),
+            expected,
+            found,
             offset,
         }
     }
@@ -142,58 +156,150 @@ fn function(i: &mut Tokens<'_>) -> winnow::Result<Function> {
             "keyword",
         )))
         .parse_next(i)?;
+
     let name = identifier
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::Description(
             "identifier",
         )))
         .parse_next(i)?;
+
     literal(TokenKind::OpenParen)
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::StringLiteral("(")))
         .parse_next(i)?;
+
     literal(TokenKind::Keyword(Keyword::Void))
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::Description(
             "keyword",
         )))
         .parse_next(i)?;
+
     literal(TokenKind::CloseParen)
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::StringLiteral(")")))
         .parse_next(i)?;
+
     literal(TokenKind::OpenBrace)
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::StringLiteral("{")))
         .parse_next(i)?;
-    let body = statement
+
+    let (body, _) = repeat_till(0.., block_item, literal(TokenKind::CloseBrace))
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::Description(
-            "statement",
+            "block_item",
         )))
         .parse_next(i)?;
-    literal(TokenKind::CloseBrace)
-        .context(StrContext::Label("function"))
-        .context(StrContext::Expected(StrContextValue::StringLiteral("}")))
-        .parse_next(i)?;
+
     Ok(Function { name, body })
 }
 
+fn block_item(i: &mut Tokens<'_>) -> winnow::Result<BlockItem> {
+    let first = peek(any)
+        .context(StrContext::Label("block_item"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "keyword or statement",
+        )))
+        .parse_next(i)?;
+
+    if let TokenKind::Keyword(Keyword::Int) = first.kind {
+        let decl = declaration
+            .context(StrContext::Label("block_item"))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "declaration",
+            )))
+            .parse_next(i)?;
+        Ok(BlockItem::D(decl))
+    } else {
+        let stmt = statement
+            .context(StrContext::Label("block_item"))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "statement",
+            )))
+            .parse_next(i)?;
+        Ok(BlockItem::S(stmt))
+    }
+}
+
+fn declaration(i: &mut Tokens<'_>) -> winnow::Result<Declaration> {
+    literal(TokenKind::Keyword(Keyword::Int))
+        .context(StrContext::Label("declaration"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "keyword",
+        )))
+        .parse_next(i)?;
+
+    let name = identifier
+        .context(StrContext::Label("declaration"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "identifier",
+        )))
+        .parse_next(i)?;
+
+    let next_token = peek(any)
+        .context(StrContext::Label("declaration"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "assignment or semicolon",
+        )))
+        .parse_next(i)?;
+
+    let init = if next_token.kind == TokenKind::Assignment {
+        take(1usize).parse_next(i)?;
+        let exp = exp
+            .context(StrContext::Label("declaration"))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "expression",
+            )))
+            .parse_next(i)?;
+        Some(exp)
+    } else {
+        None
+    };
+
+    literal(TokenKind::Semicolon)
+        .context(StrContext::Label("declaration"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "semicolon",
+        )))
+        .parse_next(i)?;
+
+    Ok(Declaration { name, init })
+}
+
 fn statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+    dispatch! { peek(any);
+        &Token { kind: TokenKind::Keyword(Keyword::Return), .. } => statement_return,
+        &Token { kind: TokenKind::Semicolon, .. } => any.value(Statement::Null),
+        _ => terminated(exp.map(Statement::Expression), literal(TokenKind::Semicolon)),
+    }
+    .context(StrContext::Label("statement"))
+    .context(StrContext::Expected(StrContextValue::Description(
+        "keyword",
+    )))
+    .context(StrContext::Expected(StrContextValue::Description(
+        "expression",
+    )))
+    .context(StrContext::Expected(StrContextValue::Description(";")))
+    .parse_next(i)
+}
+
+fn statement_return(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     literal(TokenKind::Keyword(Keyword::Return))
-        .context(StrContext::Label("statement"))
+        .context(StrContext::Label("return statement"))
         .context(StrContext::Expected(StrContextValue::Description(
             "keyword",
         )))
         .parse_next(i)?;
     let exp = exp
-        .context(StrContext::Label("statement"))
+        .context(StrContext::Label("return statement"))
         .context(StrContext::Expected(StrContextValue::Description(
             "expression",
         )))
         .parse_next(i)?;
     literal(TokenKind::Semicolon)
-        .context(StrContext::Label("statement"))
+        .context(StrContext::Label("return statement"))
         .context(StrContext::Expected(StrContextValue::Description(
             "semicolon",
         )))
@@ -212,12 +318,18 @@ fn exp_internal(i: &mut Tokens<'_>, min_prec: usize) -> winnow::Result<Expressio
         let mut next_token = peek(any).parse_next(i)?;
 
         while next_token.is_binary_operator() && next_token.precedence() >= min_prec {
-            let operator = binop.parse_next(i)?;
-            let right = exp_internal(i, next_token.precedence() + 1)?;
-            left = Expression::Binary(operator, Box::new(left), Box::new(right));
+            if next_token.kind == TokenKind::Assignment {
+                take(1usize).parse_next(i)?;
+                let right = exp_internal(i, next_token.precedence())?;
+                left = Expression::Assignment(left.into(), right.into())
+            } else {
+                let operator = binop.parse_next(i)?;
+                let right = exp_internal(i, next_token.precedence() + 1)?;
+                left = Expression::Binary(operator, left.into(), right.into());
 
-            if i.is_empty() {
-                return Ok(left);
+                if i.is_empty() {
+                    return Ok(left);
+                }
             }
             next_token = peek(any).parse_next(i)?;
         }
@@ -235,6 +347,7 @@ fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
         let next_token: &Token = peek(any).parse_next(i)?;
         let exp = match next_token.kind {
             TokenKind::Constant(_) => Expression::Constant(int.parse_next(i)?),
+            TokenKind::Identifier(_) => Expression::Var(identifier.parse_next(i)?),
             TokenKind::BitwiseComplement | TokenKind::Negation | TokenKind::LogicalNot => {
                 let op = unop.parse_next(i)?;
                 let inner_exp = factor.parse_next(i)?;
@@ -246,17 +359,7 @@ fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
                 literal(TokenKind::CloseParen).parse_next(i)?;
                 inner_exp
             }
-            _ => fail
-                .context(StrContext::Label("factor"))
-                // FIXME: error handling needs to cope with multiple "Expected" entries
-                // .context(StrContext::Expected(StrContextValue::Description(
-                //     "constant",
-                // )))
-                // .context(StrContext::Expected(StrContextValue::Description(
-                //     "unary operator",
-                // )))
-                // .context(StrContext::Expected(StrContextValue::Description("(")))
-                .parse_next(i)?,
+            _ => fail.context(StrContext::Label("factor")).parse_next(i)?,
         };
 
         Ok(exp)
@@ -355,12 +458,12 @@ fn binop(i: &mut Tokens<'_>) -> winnow::Result<BinaryOperator> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast_c::{BinaryOperator, Expression, UnaryOperator};
+    use crate::ast_c::*;
     use crate::lexer::lex;
-    use crate::parser::{exp, Tokens};
+    use crate::parser::{Tokens, exp, program};
     use assert_matches::assert_matches;
-    use winnow::error::ParseError;
     use winnow::Parser;
+    use winnow::error::ParseError;
 
     #[test]
     fn test_bring_up() {
@@ -591,6 +694,46 @@ mod tests {
                     ))
                 ))
             )
+        )
+    }
+
+    #[test]
+    fn test_declarations_and_assignments() {
+        // Listing 5-3
+        crate::tests::init_logger();
+
+        let input = r#"
+        int main(void) {
+            int a;
+            a = 2;
+            return a * 2;
+        }"#;
+        let tokens = lex(input).unwrap();
+        let mut tokens = Tokens::new(&tokens);
+        let program = program.parse_next(&mut tokens).expect("should parse");
+
+        assert_eq!(
+            program,
+            Program {
+                function: Function {
+                    name: "main".into(),
+                    body: vec![
+                        BlockItem::D(Declaration {
+                            name: "a".into(),
+                            init: None,
+                        }),
+                        BlockItem::S(Statement::Expression(Expression::Assignment(
+                            Box::new(Expression::Var("a".into())),
+                            Box::new(Expression::Constant(2))
+                        ))),
+                        BlockItem::S(Statement::Return(Expression::Binary(
+                            BinaryOperator::Multiply,
+                            Box::new(Expression::Var("a".into())),
+                            Box::new(Expression::Constant(2))
+                        )))
+                    ],
+                }
+            }
         )
     }
 }

@@ -1,10 +1,10 @@
 use thiserror::Error;
+use winnow::LocatingSlice;
 use winnow::ascii::{alphanumeric0, digit1, multispace0};
 use winnow::combinator::{alt, not, repeat, terminated};
 use winnow::prelude::*;
 use winnow::stream::AsChar;
 use winnow::token::{one_of, take_while};
-use winnow::LocatingSlice;
 
 pub(crate) type Constant = usize;
 pub(crate) type Identifier = String;
@@ -18,10 +18,21 @@ pub struct LexerError {
 // TODO: add line, column data to each token, so that the parser
 //       can report errors with line and column numbers.
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub(crate) struct Token {
     pub(crate) kind: TokenKind,
     pub(crate) span: std::ops::Range<usize>,
+}
+
+impl std::fmt::Debug for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            //"Token {{ kind: {:?}, span: {:?} }}",
+            "{:?} {:?}", // short version for winnow debug
+            self.kind, self.span
+        )
+    }
 }
 
 impl Token {
@@ -65,6 +76,7 @@ pub(crate) enum TokenKind {
     GreaterThan,        // >
     LessThanOrEqual,    // <=
     GreaterThanOrEqual, // >=
+    Assignment,         // =
 }
 
 impl TokenKind {
@@ -89,6 +101,7 @@ impl TokenKind {
                 | TokenKind::GreaterThan
                 | TokenKind::LessThanOrEqual
                 | TokenKind::GreaterThanOrEqual
+                | TokenKind::Assignment
         )
     }
 
@@ -112,6 +125,7 @@ impl TokenKind {
             TokenKind::BitwiseOr => 15,
             TokenKind::LogicalAnd => 10,
             TokenKind::LogicalOr => 5,
+            TokenKind::Assignment => 1,
 
             _ => panic!("Unexpected token: {:?}", self),
         }
@@ -176,6 +190,7 @@ fn token(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
             logical_not,
             less_than,
             greater_than,
+            assignment,
         )),
     ))
     .parse_next(input)
@@ -458,6 +473,15 @@ fn greater_than_or_equal(input: &mut LocatingInput<'_>) -> winnow::Result<Token>
     ">=".with_span()
         .map(|(_, span)| Token {
             kind: TokenKind::GreaterThanOrEqual,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn assignment(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "=".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Assignment,
             span,
         })
         .parse_next(input)

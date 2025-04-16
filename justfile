@@ -1,5 +1,5 @@
 # test_compiler also tests previous chapters
-default: test ch4 pytest
+default: test ch5 pytest
 
 
 driver-test:
@@ -19,7 +19,7 @@ pytest:
         echo "Skipping pytest on non-i386 architecture"
         exit 0
     fi
-    pytest -sv tests
+    pytest -sv -n 8 tests
 
 
 ch1:
@@ -63,3 +63,10 @@ ch4:
     #book-tests/test_compiler ./pcc.py --chapter 4 --stage tacky
     #book-tests/test_compiler ./pcc.py --chapter 4 --stage codegen
     book-tests/test_compiler ./pcc.py --chapter 4 --bitwise
+
+
+ch5:
+    cargo build
+    #book-tests/test_compiler ./pcc.py --chapter 5 --stage lex
+    book-tests/test_compiler ./pcc.py --chapter 5 --stage parse
+
