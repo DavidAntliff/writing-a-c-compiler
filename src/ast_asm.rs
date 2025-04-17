@@ -188,7 +188,7 @@ impl Display for BinaryOperator {
             BinaryOperator::BitAnd => write!(f, "andl"),
             BinaryOperator::BitOr => write!(f, "orl"),
             BinaryOperator::BitXor => write!(f, "xorl"),
-            BinaryOperator::BitShiftLeft => write!(f, "sall"),
+            BinaryOperator::BitShiftLeft => write!(f, "shll"),
             BinaryOperator::BitShiftRight => write!(f, "sarl"),
         }
     }

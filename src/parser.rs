@@ -22,7 +22,7 @@ use crate::ast_c::{
 };
 use crate::lexer::{Keyword, Token, TokenKind};
 use thiserror::Error;
-use winnow::combinator::{fail, peek, repeat, repeat_till, terminated, trace};
+use winnow::combinator::{fail, peek, repeat_till, terminated, trace};
 use winnow::dispatch;
 use winnow::error::{StrContext, StrContextValue};
 use winnow::prelude::*;
@@ -460,10 +460,10 @@ fn binop(i: &mut Tokens<'_>) -> winnow::Result<BinaryOperator> {
 mod tests {
     use crate::ast_c::*;
     use crate::lexer::lex;
-    use crate::parser::{Tokens, exp, program};
+    use crate::parser::{exp, program, Tokens};
     use assert_matches::assert_matches;
-    use winnow::Parser;
     use winnow::error::ParseError;
+    use winnow::Parser;
 
     #[test]
     fn test_bring_up() {

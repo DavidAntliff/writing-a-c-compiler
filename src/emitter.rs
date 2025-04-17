@@ -155,7 +155,7 @@ mod tests {
         let main_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
 
         let suffix = if cfg!(target_os = "linux") {
-            r#"\t.section\t.note.GNU-stack,"",@progbits"#
+            "\t.section\t.note.GNU-stack,\"\",@progbits\n"
         } else {
             r#""#
         };
@@ -173,7 +173,7 @@ mod tests {
 	imull	$42, %r10d
 	idivl	%r10d
 	cdq
-	sall	$4, -4(%rbp)
+	shll	$4, -4(%rbp)
 	movl	-4(%rbp), %ecx
 	sarl	%cl, $42
 	cmpl	$2, %r11d
