@@ -20,10 +20,11 @@ def main():
                         help="Show more output")
 
     parser.add_argument("filename", help="Path to the file to be compiled")
-    parser.add_argument("--lex", action="store_true", help="Run up to the lexer only")
-    parser.add_argument("--parse", action="store_true", help="Run up to the parser only")
-    parser.add_argument("--tacky", action="store_true", help="Run up to the tacky generation only")
-    parser.add_argument("--codegen", action="store_true", help="Run up to codegen only")
+    parser.add_argument("--lex", action="store_true", help="Run up to the lexer output only")
+    parser.add_argument("--parse", action="store_true", help="Run up to the parser output only")
+    parser.add_argument("--validate", action="store_true", help="Run up to the semantic analysis output only")
+    parser.add_argument("--tacky", action="store_true", help="Run up to the tacky generation output only")
+    parser.add_argument("--codegen", action="store_true", help="Run up to codegen output only")
     parser.add_argument("-o", "--output", help="Path to the compiled binary (optional)", default=None)
     parser.add_argument("-S", "--asm", action="store_true", help="Generate assembly code")
 
@@ -36,13 +37,13 @@ def main():
     # If an error occurs, delete all intermediate files
     try:
         preprocessed_file = preprocess(Path(args.filename))
-        assembly_file = compile(preprocessed_file, args.lex, args.parse, args.tacky, args.codegen)
+        assembly_file = compile(preprocessed_file, args.lex, args.parse, args.validate, args.tacky, args.codegen)
     finally:
         if preprocessed_file is not None:
             preprocessed_file.unlink(missing_ok=True)
 
     try:
-        if not (args.lex or args.parse or args.tacky or args.codegen):
+        if not (args.lex or args.parse or args.validate or args.tacky or args.codegen):
             assemble_and_link(assembly_file, args.output)
     finally:
         if not args.asm and assembly_file is not None:
@@ -66,6 +67,7 @@ def preprocess(filename: Path) -> Path:
 def compile(filename: Path,
             stop_after_lex: bool,
             stop_after_parse: bool,
+            stop_after_validate: bool,
             stop_after_tacky: bool,
             stop_after_codegen: bool) -> Path:
     target = filename.with_suffix('.s')
@@ -77,6 +79,8 @@ def compile(filename: Path,
         cmd += " --lex"
     if stop_after_parse:
         cmd += " --parse"
+    if stop_after_validate:
+        cmd += " --validate"
     if stop_after_tacky:
         cmd += " --tacky"
     if stop_after_codegen:

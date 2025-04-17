@@ -68,5 +68,5 @@ ch4:
 ch5:
     cargo build
     #book-tests/test_compiler ./pcc.py --chapter 5 --stage lex
-    book-tests/test_compiler ./pcc.py --chapter 5 --stage parse
-
+    #book-tests/test_compiler ./pcc.py --chapter 5 --stage parse
+    book-tests/test_compiler ./pcc.py --chapter 5 --stage validate

@@ -20,6 +20,7 @@
 
 use crate::ast_c;
 use crate::ast_c::Statement;
+use crate::id_gen::IdGenerator;
 use thiserror::Error;
 
 //pub(crate) type Identifier = String;
@@ -143,22 +144,6 @@ pub(crate) fn parse(program: &ast_c::Program) -> Result<Program, TackyError> {
     Ok(Program {
         function_definition,
     })
-}
-
-struct IdGenerator {
-    next: usize,
-}
-
-impl IdGenerator {
-    fn new() -> Self {
-        IdGenerator { next: 0 }
-    }
-
-    fn next(&mut self) -> usize {
-        let v = self.next;
-        self.next += 1;
-        v
-    }
 }
 
 fn next_var(id_gen: &mut IdGenerator) -> Identifier {

@@ -1,7 +1,7 @@
 use clap::Parser;
 use env_logger::Env;
 use line_numbers::LinePositions;
-use pcc::{Error, do_the_thing};
+use pcc::{Error, StopAfter, do_the_thing};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -31,6 +31,10 @@ struct Cli {
     #[arg(long)]
     parse: bool,
 
+    /// Stop after semantic analysis (validation)
+    #[arg(long)]
+    validate: bool,
+
     /// Stop after tacky generation
     #[arg(long)]
     tacky: bool,
@@ -56,15 +60,15 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     })?;
 
-    match do_the_thing(
-        &input,
-        cli.input,
-        cli.output,
-        cli.lex,
-        cli.parse,
-        cli.tacky,
-        cli.codegen,
-    ) {
+    let stop_after = StopAfter {
+        lex: cli.lex,
+        parse: cli.parse,
+        semantics: cli.validate,
+        tacky: cli.tacky,
+        codegen: cli.codegen,
+    };
+
+    match do_the_thing(&input, cli.input, cli.output, stop_after) {
         Ok(_) => Ok(()),
         Err(Error::Parser(e)) => {
             let line_positions = LinePositions::from(input.as_str());

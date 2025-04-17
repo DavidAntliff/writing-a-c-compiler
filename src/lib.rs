@@ -2,8 +2,10 @@ mod ast_asm;
 mod ast_c;
 mod codegen;
 mod emitter;
+mod id_gen;
 mod lexer;
 mod parser;
+mod semantics;
 mod tacky;
 
 use std::fs;
@@ -23,6 +25,9 @@ pub enum Error {
 
     #[error(transparent)]
     Parser(#[from] parser::ParserError),
+
+    #[error(transparent)]
+    Semantics(#[from] semantics::Error),
 
     #[error(transparent)]
     Tacky(#[from] tacky::TackyError),
@@ -47,30 +52,44 @@ pub fn read_input(input_filename: PathBuf) -> Result<String, Error> {
     Ok(input)
 }
 
+pub struct StopAfter {
+    pub lex: bool,
+    pub parse: bool,
+    pub semantics: bool,
+    pub tacky: bool,
+    pub codegen: bool,
+}
+
 pub fn do_the_thing(
     input: &str,
     input_filename: PathBuf,
     output_filename: Option<PathBuf>,
-    stop_after_lex: bool,
-    stop_after_parse: bool,
-    stop_after_tacky: bool,
-    stop_after_codegen: bool,
+    stop_after: StopAfter,
 ) -> Result<(), Error> {
     log::info!("Lexing input file: {}", input_filename.display());
     let lexed = lexer::lex(input)?;
 
     log::debug!("Lexed input: {lexed:#?}");
 
-    if stop_after_lex {
+    if stop_after.lex {
         return Ok(());
     }
 
     log::info!("Parsing input file: {}", input_filename.display());
-    let ast = parser::parse(&lexed)?;
+    let mut ast = parser::parse(&lexed)?;
 
     log::debug!("AST: {ast:#?}");
 
-    if stop_after_parse {
+    if stop_after.parse {
+        return Ok(());
+    }
+
+    log::info!("Semantic analysis");
+    semantics::analyse(&mut ast)?;
+
+    log::debug!("Semantics AST: {ast:#?}");
+
+    if stop_after.semantics {
         return Ok(());
     }
 
@@ -78,14 +97,13 @@ pub fn do_the_thing(
 
     log::debug!("TACKY: {tacky:#?}");
 
-    if stop_after_tacky {
+    if stop_after.tacky {
         return Ok(());
     }
 
-    //let assembly = codegen::parse(&ast)?;
     let assembly = codegen::parse(&tacky)?;
 
-    if stop_after_codegen {
+    if stop_after.codegen {
         return Ok(());
     }
 
@@ -103,9 +121,17 @@ fn lex_and_parse(input: &str) -> Result<ast_c::Program, Error> {
 }
 
 #[cfg(test)]
-fn lex_parse_and_codegen(input: &str) -> Result<ast_asm::Program, Error> {
+fn lex_parse_and_analyse(input: &str) -> Result<ast_c::Program, Error> {
+    let mut ast = parser::parse(&lexer::lex(input)?)?;
+    semantics::analyse(&mut ast)?;
+    Ok(ast)
+}
+
+#[cfg(test)]
+fn lex_parse_analyse_and_codegen(input: &str) -> Result<ast_asm::Program, Error> {
     let lexed = lexer::lex(input)?;
-    let ast = parser::parse(&lexed)?;
+    let mut ast = parser::parse(&lexed)?;
+    semantics::analyse(&mut ast)?;
     let tacky = tacky::parse(&ast)?;
     let asm = codegen::parse(&tacky)?;
     Ok(asm)
@@ -226,7 +252,7 @@ mod tests {
         }
         "#;
         assert_eq!(
-            lex_parse_and_codegen(input).unwrap(),
+            lex_parse_analyse_and_codegen(input).unwrap(),
             Program {
                 function_definition: Function {
                     name: "main".into(),
@@ -263,4 +289,47 @@ mod tests {
     }
 
     // TODO: Add integration tests - full .c to .s compilation
+
+    #[test]
+    fn test_invalid_assign_to_constant() {
+        // Page 104
+        let input = r#"
+        int main(void) {
+            2 = a * 3;
+        }"#;
+        assert_matches!(
+            lex_parse_and_analyse(input).unwrap_err(),
+            Error::Semantics(semantics::Error::InvalidLValue)
+        );
+    }
+
+    #[test]
+    fn test_invalid_declare_variable_twice() {
+        // Page 104
+        let input = r#"
+        int main(void) {
+            int a = 3;
+            int a;
+        }"#;
+        assert_matches!(
+            lex_parse_and_analyse(input).unwrap_err(),
+            Error::Semantics(semantics::Error::DuplicateVariableDeclaration(v))
+            if v == "a"
+        );
+    }
+
+    #[test]
+    fn test_invalid_not_declared() {
+        // Page 104
+        let input = r#"
+        int main(void) {
+            a = 4;
+            return a;
+        }"#;
+        assert_matches!(
+            lex_parse_and_analyse(input).unwrap_err(),
+            Error::Semantics(semantics::Error::UndeclaredVariable(v))
+            if v == "a"
+        );
+    }
 }
