@@ -263,6 +263,12 @@ mod tests {
                             dst: Operand::Reg(ast_asm::Reg::AX),
                         },
                         Instruction::Ret,
+                        // Default Return(0) at end of every function
+                        Instruction::Mov {
+                            src: Operand::Imm(0),
+                            dst: Operand::Reg(ast_asm::Reg::AX),
+                        },
+                        Instruction::Ret,
                     ]
                 }
             }

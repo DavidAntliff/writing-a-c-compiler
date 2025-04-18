@@ -19,7 +19,6 @@
 //!
 
 use crate::ast_c;
-use crate::ast_c::Statement;
 use crate::id_gen::IdGenerator;
 use thiserror::Error;
 
@@ -130,14 +129,24 @@ pub(crate) fn parse(program: &ast_c::Program) -> Result<Program, TackyError> {
         match block_item {
             ast_c::BlockItem::S(statement) => {
                 let val = emit_statement(statement, &mut body, &mut id_gen);
-                body.push(val);
+                if let Some(instruction) = val {
+                    body.push(instruction);
+                }
             }
-            ast_c::BlockItem::D(_) => {
-                // Ignore declarations for now
-                todo!()
+            ast_c::BlockItem::D(ast_c::Declaration { name, init }) => {
+                if let Some(init) = init {
+                    let result = emit_tacky(init, &mut body, &mut id_gen);
+                    body.push(Instruction::Copy {
+                        src: result,
+                        dst: Val::Var(name.clone().into()),
+                    });
+                }
             }
         }
     }
+
+    // Add a Return(0) to the end of all functions (see page 112)
+    body.push(Instruction::Return(Val::Constant(0)));
 
     let function_definition = FunctionDefinition { name, body };
 
@@ -158,7 +167,7 @@ fn emit_tacky(
     match exp {
         ast_c::Expression::Constant(c) => Val::Constant(*c),
 
-        ast_c::Expression::Var(_) => todo!(),
+        ast_c::Expression::Var(identifier) => Val::Var(identifier.into()),
 
         ast_c::Expression::Unary(op, inner) => {
             let src = emit_tacky(inner, instructions, id_gen);
@@ -252,9 +261,17 @@ fn emit_tacky(
             dst
         }
 
-        ast_c::Expression::Assignment(_, _) => {
-            // Handle assignment
-            todo!()
+        ast_c::Expression::Assignment(lhs, rhs) => {
+            if let ast_c::Expression::Var(v) = &**lhs {
+                let result = emit_tacky(rhs, instructions, id_gen);
+                instructions.push(Instruction::Copy {
+                    src: result,
+                    dst: Val::Var(v.into()),
+                });
+                Val::Var(v.into())
+            } else {
+                unreachable!("lhs should be a variable");
+            }
         }
     }
 }
@@ -295,18 +312,18 @@ fn emit_statement(
     statement: &ast_c::Statement,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
-) -> Instruction {
+) -> Option<Instruction> {
     match statement {
         ast_c::Statement::Return(exp) => {
             let val = emit_tacky(exp, instructions, id_gen);
-            Instruction::Return(val)
+            Some(Instruction::Return(val))
         }
-        Statement::Expression(_) => {
-            todo!()
+        ast_c::Statement::Expression(exp) => {
+            let _ = emit_tacky(exp, instructions, id_gen);
+            // No need to return anything for an expression statement
+            None
         }
-        Statement::Null => {
-            todo!()
-        }
+        ast_c::Statement::Null => None,
     }
 }
 
@@ -315,7 +332,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_constant_expression() {
+    fn test_emit_tacky_constant_expression() {
         let exp = ast_c::Expression::Constant(2);
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
@@ -328,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unary_expression() {
+    fn test_emit_tacky_unary_expression() {
         let exp = ast_c::Expression::Unary(
             ast_c::UnaryOperator::Complement,
             Box::new(ast_c::Expression::Constant(2)),
@@ -351,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn test_nested_unary_expression() {
+    fn test_emit_tacky_nested_unary_expression() {
         let exp = ast_c::Expression::Unary(
             ast_c::UnaryOperator::Negate,
             Box::new(ast_c::Expression::Unary(
@@ -392,20 +409,20 @@ mod tests {
     }
 
     #[test]
-    fn test_statement_return_constant() {
+    fn test_emit_statement_return_constant() {
         let statement = ast_c::Statement::Return(ast_c::Expression::Constant(2));
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
 
         assert_eq!(
-            emit_statement(&statement, &mut instructions, &mut id_gen),
+            emit_statement(&statement, &mut instructions, &mut id_gen).unwrap(),
             Instruction::Return(Val::Constant(2))
         );
         assert!(instructions.is_empty());
     }
 
     #[test]
-    fn test_statement_return_unary() {
+    fn test_emit_statement_return_unary() {
         let statement = ast_c::Statement::Return(ast_c::Expression::Unary(
             ast_c::UnaryOperator::Negate,
             Box::new(ast_c::Expression::Constant(2)),
@@ -414,7 +431,7 @@ mod tests {
         let mut id_gen = IdGenerator::new();
 
         assert_eq!(
-            emit_statement(&statement, &mut instructions, &mut id_gen),
+            emit_statement(&statement, &mut instructions, &mut id_gen).unwrap(),
             Instruction::Return(Val::Var("tmp.0".into()))
         );
         assert_eq!(
@@ -428,7 +445,32 @@ mod tests {
     }
 
     #[test]
-    fn test_program_return_unary_nested() {
+    fn test_emit_statement_expression() {
+        let statement = ast_c::Statement::Expression(ast_c::Expression::Binary(
+            ast_c::BinaryOperator::Add,
+            Box::new(ast_c::Expression::Constant(1)),
+            Box::new(ast_c::Expression::Constant(2)),
+        ));
+        let mut instructions = vec![];
+        let mut id_gen = IdGenerator::new();
+
+        // No return value for expression statement
+        assert!(emit_statement(&statement, &mut instructions, &mut id_gen).is_none(),);
+
+        // But the expression is still evaluated
+        assert_eq!(
+            instructions,
+            vec![Instruction::Binary {
+                op: BinaryOperator::Add,
+                src1: Val::Constant(1),
+                src2: Val::Constant(2),
+                dst: Val::Var("tmp.0".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_parse_program_return_unary_nested() {
         // int main(void) { return -(~(-8)); }
         let program = ast_c::Program {
             function: ast_c::Function {
@@ -470,6 +512,8 @@ mod tests {
                             dst: Val::Var("tmp.2".into()),
                         },
                         Instruction::Return(Val::Var("tmp.2".into())),
+                        // Default Return(0)
+                        Instruction::Return(Val::Constant(0)),
                     ],
                 }
             }
@@ -477,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn test_program_return_binary() {
+    fn test_parse_program_return_binary() {
         // int main(void) { return 1 * 2 - 3 * (4 + 5); }   // -25
         let program = ast_c::Program {
             function: ast_c::Function {
@@ -535,6 +579,8 @@ mod tests {
                             dst: Val::Var("tmp.3".into()),
                         },
                         Instruction::Return(Val::Var("tmp.3".into())),
+                        // Default Return(0)
+                        Instruction::Return(Val::Constant(0)),
                     ],
                 }
             }
@@ -940,6 +986,99 @@ mod tests {
                     dst: Val::Var("tmp.1".into()),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn test_parse_program_local_variables() {
+        // Listing 5-13, page 111
+        // int main(void) {
+        //     int b;
+        //     int a = 10 + 1;
+        //     b = a * 2;
+        //     return b;
+        // }
+        let program = ast_c::Program {
+            function: ast_c::Function {
+                name: "main".into(),
+                body: vec![
+                    // int b;
+                    ast_c::BlockItem::D(ast_c::Declaration {
+                        name: "b.98".into(),
+                        init: None,
+                    }),
+                    // int a = 10 + 1;
+                    ast_c::BlockItem::D(ast_c::Declaration {
+                        name: "a.99".into(),
+                        init: Some(ast_c::Expression::Binary(
+                            ast_c::BinaryOperator::Add,
+                            Box::new(ast_c::Expression::Constant(10)),
+                            Box::new(ast_c::Expression::Constant(1)),
+                        )),
+                    }),
+                    // b = a * 2;
+                    ast_c::BlockItem::S(ast_c::Statement::Expression(
+                        ast_c::Expression::Assignment(
+                            Box::new(ast_c::Expression::Var("b.98".into())),
+                            Box::new(ast_c::Expression::Binary(
+                                ast_c::BinaryOperator::Multiply,
+                                Box::new(ast_c::Expression::Var("a.99".into())),
+                                Box::new(ast_c::Expression::Constant(2)),
+                            )),
+                        ),
+                    )),
+                    // return b;
+                    ast_c::BlockItem::S(ast_c::Statement::Return(ast_c::Expression::Var(
+                        "b.98".into(),
+                    ))),
+                ],
+            },
+        };
+
+        // Listing 5-14: Expected TACKY:
+        //   tmp.2 = 10 + 1
+        //   a.1 = tmp.2
+        //   tmp.3 = a.1 * 2
+        //   b.0 = tmp.3
+        //   Return(b.0)
+        assert_eq!(
+            parse(&program).unwrap(),
+            Program {
+                function_definition: FunctionDefinition {
+                    name: "main".into(),
+                    body: vec![
+                        // int b;
+                        // NO TACKY
+
+                        // int a = 10 + 1;
+                        Instruction::Binary {
+                            op: BinaryOperator::Add,
+                            src1: Val::Constant(10),
+                            src2: Val::Constant(1),
+                            dst: Val::Var("tmp.0".into()),
+                        },
+                        Instruction::Copy {
+                            src: Val::Var("tmp.0".into()),
+                            dst: Val::Var("a.99".into()),
+                        },
+                        // b = a * 2;
+                        Instruction::Binary {
+                            op: BinaryOperator::Multiply,
+                            src1: Val::Var("a.99".into()),
+                            src2: Val::Constant(2),
+                            dst: Val::Var("tmp.1".into()),
+                        },
+                        Instruction::Copy {
+                            src: Val::Var("tmp.1".into()),
+                            dst: Val::Var("b.98".into()),
+                        },
+                        // return b;
+                        Instruction::Return(Val::Var("b.98".into())),
+                        // Default Return(0)
+                        Instruction::Return(Val::Constant(0)),
+                    ],
+                }
+            }
         );
     }
 }
