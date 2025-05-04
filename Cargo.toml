@@ -5,15 +5,15 @@ edition = "2024"
 
 [dependencies]
 assert_matches = "1.5.0"
-clap = { version = "4.5.32", features = ["derive"] }
-thiserror = "1.0.69"
-env_logger = "0.11.7"
+clap = { version = "4.5.37", features = ["derive"] }
+thiserror = "2.0.12"
+env_logger = "0.11.8"
 log = "0.4.27"
-anyhow = "1.0.97"
+anyhow = "1.0.98"
 line-numbers = "0.4.0"
 
 [dependencies.winnow]
-version = "0.7.4"
+version = "0.7.9"
 #features = ["debug"]
 
 [dev-dependencies]
