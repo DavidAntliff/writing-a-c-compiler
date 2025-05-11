@@ -1,10 +1,10 @@
 use thiserror::Error;
-use winnow::LocatingSlice;
 use winnow::ascii::{alphanumeric0, digit1, multispace0};
 use winnow::combinator::{alt, not, repeat, terminated};
 use winnow::prelude::*;
 use winnow::stream::AsChar;
 use winnow::token::{one_of, take_while};
+use winnow::LocatingSlice;
 
 pub(crate) type Constant = usize;
 pub(crate) type Identifier = String;
@@ -59,6 +59,7 @@ pub(crate) enum TokenKind {
     Negation,           // -
     Decrement,          // --
     Add,                // +
+    Increment,          // ++
     Multiply,           // *
     Divide,             // /
     Remainder,          // %
@@ -163,6 +164,7 @@ fn token(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
             identifier,
             constant,
             decrement,
+            increment,
             bitwise_shift_left,
             bitwise_shift_right,
             logical_and,
@@ -311,6 +313,15 @@ fn decrement(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
     "--".with_span()
         .map(|(_, span)| Token {
             kind: TokenKind::Decrement,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn increment(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "++".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Increment,
             span,
         })
         .parse_next(input)

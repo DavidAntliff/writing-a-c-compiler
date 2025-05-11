@@ -18,6 +18,7 @@ VALID_C_PROGRAMS = {
     "return_2": CProgram(Path("tests/c/valid/return_2.c"), 2),
     "return_1+2": CProgram(Path("tests/c/valid/return_1+2.c"), 3),
     "return_logical_ops": CProgram(Path("tests/c/valid/return_logical_ops.c"), 1),
+    "return_increment": CProgram(Path("tests/c/valid/return_increment.c"), 13),
 }
 
 @dataclass

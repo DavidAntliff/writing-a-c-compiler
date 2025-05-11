@@ -7,12 +7,15 @@
 //!   <declaration> ::= "int" <identifier> [ "=" <exp> ] ";"
 //!   <statement> ::= "return" <exp> ";" | <exp> ";" | ";"
 //!   <exp> := <factor> | <exp> <binop> <exp>
-//!   <factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")"
-//!   <unop> ::= "-" | "~" | "!"
+//!   <factor> ::= <int> | <identifier>
+//!              | <unop> <factor> | <factor> <unop-post>
+//!              | "(" <exp> ")"
+//!   <unop> ::= "-" | "~" | "!" | "++"
+//!   <unop-post> ::= "++" | "--"
 //!   <binop> ::= "-" | "+" | "-" | "*" | "/" | "%"
-//!               "&" | "|" | "^" | "<<" | ">>"
-//!               "&&" | "||" | "==" | "!="
-//!               "<" | "<=" | ">" | ">="
+//!             | "&" | "|" | "^" | "<<" | ">>"
+//!             | "&&" | "||" | "==" | "!="
+//!             | "<" | "<=" | ">" | ">="
 //!   <identifier> ::= ? An identifier token ?
 //!   <int> ::= ? A constant token ?
 //!
@@ -410,6 +413,7 @@ fn unop(i: &mut Tokens<'_>) -> winnow::Result<UnaryOperator> {
         .try_map(|t: &Token| match t.kind {
             TokenKind::BitwiseComplement => Ok(UnaryOperator::Complement),
             TokenKind::Negation => Ok(UnaryOperator::Negate),
+            TokenKind::Increment => Ok(UnaryOperator::Increment),
             TokenKind::LogicalNot => Ok(UnaryOperator::Not),
             _ => Err(ParserError {
                 message: "Expected a unary operator".to_string(),

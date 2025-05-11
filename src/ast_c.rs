@@ -11,7 +11,7 @@
 //!       | Unary(unary_operator, exp)
 //!       | Binary(binary_operator, exp, exp)
 //!       | Assignment(exp, exp)
-//!   unary_operator = Complement | Negate | Not
+//!   unary_operator = Complement | Negate | Not | PreIncrement | PostIncrement
 //!   binary_operator = Add | Subtract | Multiply | Divide | Remainder
 //!                   | BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
 //!                   | And | Or | Equal | NotEqual | LessThan | GreaterThan
@@ -64,6 +64,7 @@ pub(crate) enum UnaryOperator {
     Complement,
     Negate,
     Not,
+    Increment,
 }
 
 #[derive(Debug, PartialEq, Clone)]
