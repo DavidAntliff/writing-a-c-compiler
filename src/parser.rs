@@ -7,11 +7,10 @@
 //!   <declaration> ::= "int" <identifier> [ "=" <exp> ] ";"
 //!   <statement> ::= "return" <exp> ";" | <exp> ";" | ";"
 //!   <exp> := <factor> | <exp> <binop> <exp>
-//!   <factor> ::= <int> | <identifier>
-//!              | <unop> <factor> | <factor> <unop-post>
-//!              | "(" <exp> ")"
-//!   <unop> ::= "-" | "~" | "!" | "++"
-//!   <unop-post> ::= "++" | "--"
+//!   <primary-exp> := <int> | <identifier> | "(" <exp> ")"
+//!   <postfix-exp> := <primary-exp> { "++" | "--" }
+//!   <factor> ::= <unop> <factor> | <postfix-exp>
+//!   <unop> ::= "-" | "~" | "!" | "++" | "--"
 //!   <binop> ::= "-" | "+" | "-" | "*" | "/" | "%"
 //!             | "&" | "|" | "^" | "<<" | ">>"
 //!             | "&&" | "||" | "==" | "!="
@@ -345,17 +344,12 @@ fn exp(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
     exp_internal(i, 0)
 }
 
-fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
+fn primary_exp(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
     trace("factor", |i: &mut _| {
         let next_token: &Token = peek(any).parse_next(i)?;
         let exp = match next_token.kind {
             TokenKind::Constant(_) => Expression::Constant(int.parse_next(i)?),
             TokenKind::Identifier(_) => Expression::Var(identifier.parse_next(i)?),
-            TokenKind::BitwiseComplement | TokenKind::Negation | TokenKind::LogicalNot => {
-                let op = unop.parse_next(i)?;
-                let inner_exp = factor.parse_next(i)?;
-                Expression::Unary(op, Box::new(inner_exp))
-            }
             TokenKind::OpenParen => {
                 take(1usize).parse_next(i)?;
                 let inner_exp = exp_internal(i, 0)?;
@@ -365,6 +359,51 @@ fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
             _ => fail.context(StrContext::Label("factor")).parse_next(i)?,
         };
 
+        Ok(exp)
+    })
+    .parse_next(i)
+}
+
+fn postfix_exp(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
+    trace("postfix_exp", |i: &mut _| {
+        let primary = primary_exp.parse_next(i)?;
+        postfix_helper(i, primary)
+    })
+    .parse_next(i)
+}
+
+fn postfix_helper(i: &mut Tokens<'_>, mut expr: Expression) -> winnow::Result<Expression> {
+    loop {
+        let next_token: &Token = peek(any).parse_next(i)?;
+        match next_token.kind {
+            TokenKind::Increment => {
+                take(1usize).parse_next(i)?;
+                expr = Expression::PostFixIncrement(Box::new(expr));
+            }
+            TokenKind::Decrement => {
+                take(1usize).parse_next(i)?;
+                expr = Expression::PostFixDecrement(Box::new(expr));
+            }
+            _ => return Ok(expr),
+        }
+    }
+}
+
+fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
+    trace("factor", |i: &mut _| {
+        let next_token: &Token = peek(any).parse_next(i)?;
+        let exp = match next_token.kind {
+            TokenKind::BitwiseComplement
+            | TokenKind::Negation
+            | TokenKind::LogicalNot
+            | TokenKind::Increment
+            | TokenKind::Decrement => {
+                let operator = unop.parse_next(i)?;
+                let inner_exp = factor.parse_next(i)?;
+                Expression::Unary(operator, Box::new(inner_exp))
+            }
+            _ => fail.context(StrContext::Label("factor")).parse_next(i)?,
+        };
         Ok(exp)
     })
     .parse_next(i)
@@ -414,6 +453,7 @@ fn unop(i: &mut Tokens<'_>) -> winnow::Result<UnaryOperator> {
             TokenKind::BitwiseComplement => Ok(UnaryOperator::Complement),
             TokenKind::Negation => Ok(UnaryOperator::Negate),
             TokenKind::Increment => Ok(UnaryOperator::Increment),
+            TokenKind::Decrement => Ok(UnaryOperator::Decrement),
             TokenKind::LogicalNot => Ok(UnaryOperator::Not),
             _ => Err(ParserError {
                 message: "Expected a unary operator".to_string(),

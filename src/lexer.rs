@@ -45,6 +45,8 @@ impl Token {
     }
 }
 
+// Generally, name tokens after their semantic role, rather than after the lexeme.
+// This makes the precedence table and parser easier to read.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum TokenKind {
     Keyword(Keyword),
@@ -78,6 +80,8 @@ pub(crate) enum TokenKind {
     LessThanOrEqual,    // <=
     GreaterThanOrEqual, // >=
     Assignment,         // =
+    QuestionMark,       // ?
+    Colon,              // :
 }
 
 impl TokenKind {
@@ -138,6 +142,8 @@ pub(crate) enum Keyword {
     Int,
     Void,
     Return,
+    If,
+    Else,
 }
 
 pub(crate) fn lex(input: &str) -> Result<Vec<Token>, LexerError> {
@@ -193,6 +199,8 @@ fn token(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
             less_than,
             greater_than,
             assignment,
+            question_mark,
+            colon,
         )),
     ))
     .parse_next(input)
@@ -282,6 +290,14 @@ fn identifier(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
         }),
         "return" => Ok(Token {
             kind: TokenKind::Keyword(Keyword::Return),
+            span,
+        }),
+        "if" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::If),
+            span,
+        }),
+        "else" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Else),
             span,
         }),
         _ => Ok(Token {
@@ -493,6 +509,24 @@ fn assignment(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
     "=".with_span()
         .map(|(_, span)| Token {
             kind: TokenKind::Assignment,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn question_mark(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    "?".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::QuestionMark,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn colon(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    ":".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Colon,
             span,
         })
         .parse_next(input)

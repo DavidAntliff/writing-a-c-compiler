@@ -14,7 +14,7 @@ line-numbers = "0.4.0"
 
 [dependencies.winnow]
 version = "0.7.9"
-#features = ["debug"]
+features = ["debug"]
 
 [dev-dependencies]
 assert_matches = "1.5.0"

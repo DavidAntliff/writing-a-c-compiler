@@ -11,7 +11,9 @@
 //!       | Unary(unary_operator, exp)
 //!       | Binary(binary_operator, exp, exp)
 //!       | Assignment(exp, exp)
-//!   unary_operator = Complement | Negate | Not | PreIncrement | PostIncrement
+//!       | PostFixIncrement(exp)
+//!       | PostFixDecrement(exp)
+//!   unary_operator = Complement | Negate | Not | Increment | Decrement
 //!   binary_operator = Add | Subtract | Multiply | Divide | Remainder
 //!                   | BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
 //!                   | And | Or | Equal | NotEqual | LessThan | GreaterThan
@@ -57,6 +59,8 @@ pub(crate) enum Expression {
     Unary(UnaryOperator, Box<Expression>),
     Binary(BinaryOperator, Box<Expression>, Box<Expression>),
     Assignment(Box<Expression>, Box<Expression>),
+    PostFixIncrement(Box<Expression>),
+    PostFixDecrement(Box<Expression>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -65,6 +69,7 @@ pub(crate) enum UnaryOperator {
     Negate,
     Not,
     Increment,
+    Decrement,
 }
 
 #[derive(Debug, PartialEq, Clone)]

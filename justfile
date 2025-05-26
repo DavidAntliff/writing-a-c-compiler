@@ -1,28 +1,32 @@
 # test_compiler also tests previous chapters
-default: test ch5 pytest
+default: test ch6 pytest
 
 
-driver-test:
-    rm -f driver driver.i driver.s
-    python3 pcc.py driver/driver.c
-    ./driver ; echo $?
+check-i386:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    arch="$(uname -p)"
+    if [ "$arch" != "i386" ]; then
+      echo "Error: Expected i386 architecture, got $arch." >&2;
+      exit 1;
+    fi
+
+
+#driver-test:
+#    rm -f driver/driver driver/driver.i driver/driver.s
+#    python3 pcc.py driver/driver.c
+#    ./driver ; echo $?
 
 
 test:
     cargo test
 
 
-pytest:
-    #!/usr/bin/env bash
-    if [[ $OSTYPE == 'darwin'* && $(arch) != "i386" ]]
-    then
-        echo "Skipping pytest on non-i386 architecture"
-        exit 0
-    fi
+pytest: check-i386
     pytest -sv -n 8 tests
 
 
-ch1:
+ch1: check-i386
     cargo build
     #book-tests/test_compiler ./pcc.py --chapter 1 --stage lex
     #book-tests/test_compiler ./pcc.py --chapter 1 --stage parse
@@ -30,11 +34,11 @@ ch1:
     book-tests/test_compiler ./pcc.py --chapter 1
 
 
-listing_1-1:
+listing_1-1: check-i386
     cargo build && ./pcc.py ch/1/listing_1.1.c && ch/1/listing_1.1 ; echo $?
 
 
-ch2:
+ch2: check-i386
     cargo build
     #book-tests/test_compiler ./pcc.py --chapter 2 --stage lex
     #book-tests/test_compiler ./pcc.py --chapter 2 --stage parse
@@ -43,11 +47,11 @@ ch2:
     book-tests/test_compiler ./pcc.py --chapter 2
 
 
-listing_2-1:
+listing_2-1: check-i386
     cargo build && ./pcc.py ch/2/listing_2.1.c && ch/2/listing_2.1 ; echo $?
 
 
-ch3:
+ch3: check-i386
     cargo build
     #book-tests/test_compiler ./pcc.py --chapter 3 --stage lex
     #book-tests/test_compiler ./pcc.py --chapter 3 --stage parse
@@ -56,7 +60,7 @@ ch3:
     book-tests/test_compiler ./pcc.py --chapter 3 --bitwise
 
 
-ch4:
+ch4: check-i386
     cargo build
     #book-tests/test_compiler ./pcc.py --chapter 4 --stage lex
     #book-tests/test_compiler ./pcc.py --chapter 4 --stage parse
@@ -65,9 +69,14 @@ ch4:
     book-tests/test_compiler ./pcc.py --chapter 4 --bitwise
 
 
-ch5:
+ch5: check-i386
     cargo build
     #book-tests/test_compiler ./pcc.py --chapter 5 --stage lex
     #book-tests/test_compiler ./pcc.py --chapter 5 --stage parse
     #book-tests/test_compiler ./pcc.py --chapter 5 --stage validate
     book-tests/test_compiler ./pcc.py --chapter 5 --bitwise
+
+
+ch6: check-i386
+    cargo build
+    book-tests/test_compiler ./pcc.py --chapter 6 --stage lex

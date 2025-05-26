@@ -169,6 +169,18 @@ fn emit_tacky(
 
         ast_c::Expression::Var(identifier) => Val::Var(identifier.into()),
 
+        ast_c::Expression::Unary(ast_c::UnaryOperator::Increment, inner)
+        | ast_c::Expression::Unary(ast_c::UnaryOperator::Decrement, inner) => {
+            assert!(matches!(&**inner, ast_c::Expression::Var(_)));
+            let (instructions, dst) = emit_compound_expression(
+                ast_c::BinaryOperator::Add,
+                inner,
+                (ast_c::Expression::Constant(1)),
+            )
+            todo!()  // add instructions to vec
+            dst
+        }
+
         ast_c::Expression::Unary(op, inner) => {
             let src = emit_tacky(inner, instructions, id_gen);
             let dst = Val::Var(next_var(id_gen));
@@ -325,6 +337,10 @@ fn emit_statement(
         }
         ast_c::Statement::Null => None,
     }
+}
+
+fn emit_compound_expression(op: ast_c::BinaryOperator, v: Box<Expression>, rhs: todo) -> (Instruction, Val) {
+    todo!()
 }
 
 #[cfg(test)]

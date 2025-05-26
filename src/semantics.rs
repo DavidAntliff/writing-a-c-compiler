@@ -1,4 +1,4 @@
-use crate::ast_c::{BlockItem, Declaration, Expression, Program, Statement};
+use crate::ast_c::{BlockItem, Declaration, Expression, Program, Statement, UnaryOperator};
 use crate::id_gen::IdGenerator;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -96,10 +96,17 @@ fn resolve_exp(
                 Err(Error::UndeclaredVariable(v.clone()))
             }
         }
-        Expression::Unary(op, exp) => Ok(Expression::Unary(
-            op.clone(),
-            resolve_exp(exp, variable_map)?.into(),
-        )),
+        Expression::Unary(op, exp) => {
+            if matches!(op, UnaryOperator::Increment | UnaryOperator::Decrement)
+                && !matches!(**exp, Expression::Var(_))
+            {
+                return Err(Error::InvalidLValue);
+            }
+            Ok(Expression::Unary(
+                op.clone(),
+                resolve_exp(exp, variable_map)?.into(),
+            ))
+        }
         Expression::Binary(op, left, right) => Ok(Expression::Binary(
             op.clone(),
             resolve_exp(left, variable_map)?.into(),
@@ -112,6 +119,22 @@ fn resolve_exp(
             Ok(Expression::Assignment(
                 resolve_exp(left, variable_map)?.into(),
                 resolve_exp(right, variable_map)?.into(),
+            ))
+        }
+        Expression::PostFixIncrement(exp) => {
+            if !matches!(**exp, Expression::Var(_)) {
+                return Err(Error::InvalidLValue);
+            }
+            Ok(Expression::PostFixIncrement(
+                resolve_exp(exp, variable_map)?.into(),
+            ))
+        }
+        Expression::PostFixDecrement(exp) => {
+            if !matches!(**exp, Expression::Var(_)) {
+                return Err(Error::InvalidLValue);
+            }
+            Ok(Expression::PostFixDecrement(
+                resolve_exp(exp, variable_map)?.into(),
             ))
         }
     }
