@@ -323,6 +323,7 @@ fn emit_statement(
             // No need to return anything for an expression statement
             None
         }
+        ast_c::Statement::If { .. } => todo!(),
         ast_c::Statement::Null => None,
     }
 }

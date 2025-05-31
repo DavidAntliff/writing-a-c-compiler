@@ -5,7 +5,10 @@
 //!   <function> ::= "int" <identifier> "(" "void" ")" "{" { <block-item> } "}"
 //!   <block-item> ::= <statement> | <declaration>
 //!   <declaration> ::= "int" <identifier> [ "=" <exp> ] ";"
-//!   <statement> ::= "return" <exp> ";" | <exp> ";" | ";"
+//!   <statement> ::= "return" <exp> ";"
+//!                 | <exp> ";"
+//!                 | "if" "(" <exp> ")" <statement> [ "else" <statement> ]
+//!                 | ";"
 //!   <exp> := <factor> | <exp> <binop> <exp>
 //!   <factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")"
 //!   <unop> ::= "-" | "~" | "!"
@@ -271,6 +274,9 @@ fn declaration(i: &mut Tokens<'_>) -> winnow::Result<Declaration> {
 fn statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     dispatch! { peek(any);
         &Token { kind: TokenKind::Keyword(Keyword::Return), .. } => statement_return,
+        &Token { kind: TokenKind::Keyword(Keyword::If), .. } => {
+            statement_if
+        },
         &Token { kind: TokenKind::Semicolon, .. } => any.value(Statement::Null),
         _ => terminated(exp.map(Statement::Expression), literal(TokenKind::Semicolon)),
     }
@@ -305,6 +311,65 @@ fn statement_return(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
         )))
         .parse_next(i)?;
     Ok(Statement::Return(exp))
+}
+
+fn statement_if(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+    literal(TokenKind::Keyword(Keyword::If))
+        .context(StrContext::Label("if statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "keyword",
+        )))
+        .parse_next(i)?;
+    literal(TokenKind::OpenParen)
+        .context(StrContext::Label("if statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "open parenthesis",
+        )))
+        .parse_next(i)?;
+    let exp = exp
+        .context(StrContext::Label("if statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "expression",
+        )))
+        .parse_next(i)?;
+    literal(TokenKind::CloseParen)
+        .context(StrContext::Label("if statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "close parenthesis",
+        )))
+        .parse_next(i)?;
+    let then_stmt = statement
+        .context(StrContext::Label("if statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "then statement",
+        )))
+        .parse_next(i)?;
+
+    let next_token = peek(any)
+        .context(StrContext::Label("if statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "keyword",
+        )))
+        .parse_next(i)?;
+
+    let maybe_else_stmt = if next_token.kind == TokenKind::Keyword(Keyword::Else) {
+        take(1usize).parse_next(i)?;
+        let stmt = statement
+            .context(StrContext::Label("if statement"))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "else statement",
+            )))
+            .parse_next(i)?;
+        Some(stmt)
+    } else {
+        None
+    };
+
+    Ok(Statement::If {
+        condition: exp,
+        then: Box::new(then_stmt),
+        else_: maybe_else_stmt.and_then(|e| Some(Box::new(e))),
+    })
 }
 
 /// Parses an expression with operator precedence, using Precedence Climbing.
@@ -458,9 +523,9 @@ fn binop(i: &mut Tokens<'_>) -> winnow::Result<BinaryOperator> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::ast_c::*;
     use crate::lexer::lex;
-    use crate::parser::{exp, program, Tokens};
     use assert_matches::assert_matches;
     use winnow::error::ParseError;
     use winnow::Parser;
@@ -733,6 +798,43 @@ mod tests {
                         )))
                     ],
                 }
+            }
+        )
+    }
+
+    #[test]
+    fn test_nested_if() {
+        // Listing 6-5
+        let input = r#"
+        if (a > 100)
+            return 0;
+        else if (a > 50)
+            return 1;
+        else
+            return 2;"#;
+
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let ast = statement.parse(tokens).expect("should parse");
+
+        assert_eq!(
+            ast,
+            Statement::If {
+                condition: Expression::Binary(
+                    BinaryOperator::GreaterThan,
+                    Box::new(Expression::Var("a".into())),
+                    Box::new(Expression::Constant(100))
+                ),
+                then: Box::new(Statement::Return(Expression::Constant(0))),
+                else_: Some(Box::new(Statement::If {
+                    condition: Expression::Binary(
+                        BinaryOperator::GreaterThan,
+                        Box::new(Expression::Var("a".into())),
+                        Box::new(Expression::Constant(50))
+                    ),
+                    then: Box::new(Statement::Return(Expression::Constant(1))),
+                    else_: Some(Box::new(Statement::Return(Expression::Constant(2))))
+                }))
             }
         )
     }

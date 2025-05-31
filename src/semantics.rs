@@ -55,6 +55,11 @@ fn resolve_statement(
     match statement {
         Statement::Return(exp) => Ok(Statement::Return(resolve_exp(exp, variable_map)?)),
         Statement::Expression(exp) => Ok(Statement::Expression(resolve_exp(exp, variable_map)?)),
+        Statement::If {
+            condition,
+            then,
+            else_,
+        } => todo!(),
         Statement::Null => Ok(Statement::Null),
     }
 }

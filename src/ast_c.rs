@@ -5,7 +5,10 @@
 //!   function_definition = Function(identifier name, block_item* body)
 //!   block_item = S(statement) | D(declaration)
 //!   declaration = Declaration(identifier name, exp? init)
-//!   statement = Return(exp) | Expression(exp) | Null
+//!   statement = Return(exp)
+//!             | Expression(exp)
+//!             | If(exp condition, statement then, statement? else)
+//!             | Null
 //!   exp = Constant(int)
 //!       | Var(identifier)
 //!       | Unary(unary_operator, exp)
@@ -47,6 +50,11 @@ pub(crate) struct Declaration {
 pub(crate) enum Statement {
     Return(Expression),
     Expression(Expression),
+    If {
+        condition: Expression,
+        then: Box<Statement>,
+        else_: Option<Box<Statement>>,
+    },
     Null,
 }
 
