@@ -14,6 +14,7 @@
 //!       | Unary(unary_operator, exp)
 //!       | Binary(binary_operator, exp, exp)
 //!       | Assignment(exp, exp)
+//!       | Conditional(exp condition, exp, exp)
 //!   unary_operator = Complement | Negate | Not
 //!   binary_operator = Add | Subtract | Multiply | Divide | Remainder
 //!                   | BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
@@ -65,6 +66,7 @@ pub(crate) enum Expression {
     Unary(UnaryOperator, Box<Expression>),
     Binary(BinaryOperator, Box<Expression>, Box<Expression>),
     Assignment(Box<Expression>, Box<Expression>),
+    Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
 }
 
 #[derive(Debug, PartialEq, Clone)]

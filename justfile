@@ -79,4 +79,5 @@ ch5: check-i386
 
 ch6: check-i386
     cargo build
-    book-tests/test_compiler ./pcc.py --chapter 6 --stage lex
+    #book-tests/test_compiler ./pcc.py --chapter 6 --stage lex
+    book-tests/test_compiler ./pcc.py --chapter 6 --stage parse

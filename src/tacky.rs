@@ -273,6 +273,10 @@ fn emit_tacky(
                 unreachable!("lhs should be a variable");
             }
         }
+
+        ast_c::Expression::Conditional(cond, this, else_) => {
+            todo!()
+        }
     }
 }
 

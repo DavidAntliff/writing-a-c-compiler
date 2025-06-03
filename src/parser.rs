@@ -9,7 +9,9 @@
 //!                 | <exp> ";"
 //!                 | "if" "(" <exp> ")" <statement> [ "else" <statement> ]
 //!                 | ";"
-//!   <exp> := <factor> | <exp> <binop> <exp>
+//!   <exp> := <factor>
+//!          | <exp> <binop> <exp>
+//!          | <exp> "?" <exp> ":" <exp>
 //!   <factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")"
 //!   <unop> ::= "-" | "~" | "!"
 //!   <binop> ::= "-" | "+" | "-" | "*" | "/" | "%"
@@ -386,16 +388,21 @@ fn exp_internal(i: &mut Tokens<'_>, min_prec: usize) -> winnow::Result<Expressio
             if next_token.kind == TokenKind::Assignment {
                 take(1usize).parse_next(i)?;
                 let right = exp_internal(i, next_token.precedence())?;
-                left = Expression::Assignment(left.into(), right.into())
+                left = Expression::Assignment(left.into(), right.into());
+            } else if next_token.kind == TokenKind::QuestionMark {
+                let middle = conditional_middle.parse_next(i)?;
+                let right = exp_internal(i, next_token.precedence())?;
+                left = Expression::Conditional(left.into(), middle.into(), right.into());
             } else {
                 let operator = binop.parse_next(i)?;
                 let right = exp_internal(i, next_token.precedence() + 1)?;
                 left = Expression::Binary(operator, left.into(), right.into());
-
-                if i.is_empty() {
-                    return Ok(left);
-                }
             }
+
+            if i.is_empty() {
+                return Ok(left);
+            }
+
             next_token = peek(any).parse_next(i)?;
         }
         Ok(left)
@@ -430,6 +437,24 @@ fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
         Ok(exp)
     })
     .parse_next(i)
+}
+
+fn conditional_middle(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
+    literal(TokenKind::QuestionMark)
+        .context(StrContext::Label("conditional"))
+        .context(StrContext::Expected(StrContextValue::Description("?")))
+        .parse_next(i)?;
+    let exp = exp
+        .context(StrContext::Label("conditional"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "expression",
+        )))
+        .parse_next(i)?;
+    literal(TokenKind::Colon)
+        .context(StrContext::Label("conditional"))
+        .context(StrContext::Expected(StrContextValue::Description(":")))
+        .parse_next(i)?;
+    Ok(exp)
 }
 
 fn identifier(i: &mut Tokens<'_>) -> winnow::Result<String> {
@@ -836,6 +861,144 @@ mod tests {
                     else_: Some(Box::new(Statement::Return(Expression::Constant(2))))
                 }))
             }
+        )
+    }
+
+    #[test]
+    fn test_parse_ternary_1() {
+        // Page 122
+        let input = r#"a = 1 ? 2 : 3"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        //let ast = exp.parse(tokens).expect("should parse");
+        let res = exp.parse(tokens);
+        dbg!(&res);
+        let ast = res.expect("should parse");
+
+        assert_eq!(
+            ast,
+            Expression::Assignment(
+                Box::new(Expression::Var("a".into())),
+                Box::new(Expression::Conditional(
+                    Box::new(Expression::Constant(1)),
+                    Box::new(Expression::Constant(2)),
+                    Box::new(Expression::Constant(3))
+                ))
+            )
+        )
+    }
+
+    #[test]
+    fn test_parse_ternary_2() {
+        // Page 122
+        let input = r#"a || b ? 2 : 3"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let ast = exp.parse(tokens).expect("should parse");
+
+        // Parses as (a || b) ? 2 : 3
+        assert_eq!(
+            ast,
+            Expression::Conditional(
+                Box::new(Expression::Binary(
+                    BinaryOperator::Or,
+                    Box::new(Expression::Var("a".into())),
+                    Box::new(Expression::Var("b".into()))
+                )),
+                Box::new(Expression::Constant(2)),
+                Box::new(Expression::Constant(3))
+            )
+        )
+    }
+
+    #[test]
+    fn test_parse_ternary_3() {
+        // Page 122
+        let input = r#"1 ? 2 : 3 || 4"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let ast = exp.parse(tokens).expect("should parse");
+
+        // Parses as 1 ? 2 : (3 || 4)
+        assert_eq!(
+            ast,
+            Expression::Conditional(
+                Box::new(Expression::Constant(1)),
+                Box::new(Expression::Constant(2)),
+                Box::new(Expression::Binary(
+                    BinaryOperator::Or,
+                    Box::new(Expression::Constant(3)),
+                    Box::new(Expression::Constant(4))
+                )),
+            )
+        )
+    }
+
+    #[test]
+    fn test_parse_ternary_4() {
+        // Page 122
+        let input = r#"x ? x = 1 : 2"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let ast = exp.parse(tokens).expect("should parse");
+
+        // Parses as x ? (x = 1) : 2
+        assert_eq!(
+            ast,
+            Expression::Conditional(
+                Box::new(Expression::Var("x".into())),
+                Box::new(Expression::Assignment(
+                    Box::new(Expression::Var("x".into())),
+                    Box::new(Expression::Constant(1))
+                )),
+                Box::new(Expression::Constant(2)),
+            )
+        )
+    }
+
+    #[test]
+    fn test_parse_ternary_5() {
+        // Page 123
+        let input = r#"a ? b ? 1 : 2 : 3"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let ast = exp.parse(tokens).expect("should parse");
+
+        // Parses as a ? (b ? 1 : 2) : 3
+        assert_eq!(
+            ast,
+            Expression::Conditional(
+                Box::new(Expression::Var("a".into())),
+                Box::new(Expression::Conditional(
+                    Box::new(Expression::Var("b".into())),
+                    Box::new(Expression::Constant(1)),
+                    Box::new(Expression::Constant(2)),
+                )),
+                Box::new(Expression::Constant(3)),
+            )
+        )
+    }
+
+    #[test]
+    fn test_parse_ternary_6() {
+        // Page 123
+        let input = r#"a ? 1 : b ? 2 : 3"#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let ast = exp.parse(tokens).expect("should parse");
+
+        // Parses as a ? 1 : (b ? 2 : 3)  [right associative]
+        assert_eq!(
+            ast,
+            Expression::Conditional(
+                Box::new(Expression::Var("a".into())),
+                Box::new(Expression::Constant(1)),
+                Box::new(Expression::Conditional(
+                    Box::new(Expression::Var("b".into())),
+                    Box::new(Expression::Constant(2)),
+                    Box::new(Expression::Constant(3)),
+                )),
+            )
         )
     }
 }

@@ -119,6 +119,15 @@ fn resolve_exp(
                 resolve_exp(right, variable_map)?.into(),
             ))
         }
+        Expression::Conditional(cond, then, else_) =>
+        //Ok(Expression::Conditional(
+        // resolve_exp(cond, variable_map)?.into(),
+        // resolve_exp(then, variable_map)?.into(),
+        // resolve_exp(else_, variable_map)?.into(),
+        //))
+        {
+            todo!()
+        }
     }
 }
 

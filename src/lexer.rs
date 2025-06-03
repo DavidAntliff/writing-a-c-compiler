@@ -106,6 +106,7 @@ impl TokenKind {
                 | TokenKind::LessThanOrEqual
                 | TokenKind::GreaterThanOrEqual
                 | TokenKind::Assignment
+                | TokenKind::QuestionMark // for the purposes of parsing, only
         )
     }
 
@@ -129,6 +130,7 @@ impl TokenKind {
             TokenKind::BitwiseOr => 15,
             TokenKind::LogicalAnd => 10,
             TokenKind::LogicalOr => 5,
+            TokenKind::QuestionMark => 3,
             TokenKind::Assignment => 1,
 
             _ => panic!("Unexpected token: {:?}", self),
