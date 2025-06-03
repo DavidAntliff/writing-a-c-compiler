@@ -59,7 +59,18 @@ fn resolve_statement(
             condition,
             then,
             else_,
-        } => todo!(),
+        } => {
+            let else_ = if let Some(else_stmt) = else_ {
+                Some(Box::new(resolve_statement(else_stmt, variable_map)?))
+            } else {
+                None
+            };
+            Ok(Statement::If {
+                condition: resolve_exp(condition, variable_map)?,
+                then: Box::new(resolve_statement(then, variable_map)?),
+                else_,
+            })
+        }
         Statement::Null => Ok(Statement::Null),
     }
 }
@@ -119,15 +130,11 @@ fn resolve_exp(
                 resolve_exp(right, variable_map)?.into(),
             ))
         }
-        Expression::Conditional(cond, then, else_) =>
-        //Ok(Expression::Conditional(
-        // resolve_exp(cond, variable_map)?.into(),
-        // resolve_exp(then, variable_map)?.into(),
-        // resolve_exp(else_, variable_map)?.into(),
-        //))
-        {
-            todo!()
-        }
+        Expression::Conditional(cond, then, else_) => Ok(Expression::Conditional(
+            resolve_exp(cond, variable_map)?.into(),
+            resolve_exp(then, variable_map)?.into(),
+            resolve_exp(else_, variable_map)?.into(),
+        )),
     }
 }
 
