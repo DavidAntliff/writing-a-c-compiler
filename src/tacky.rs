@@ -274,8 +274,8 @@ fn emit_tacky(
             }
         }
 
-        ast_c::Expression::Conditional(cond, this, else_) => {
-            todo!()
+        ast_c::Expression::Conditional(cond, e1, e2) => {
+            emit_exp_conditional(cond, e1, e2, instructions, id_gen)
         }
     }
 }
@@ -327,9 +327,163 @@ fn emit_statement(
             // No need to return anything for an expression statement
             None
         }
-        ast_c::Statement::If { .. } => todo!(),
+        ast_c::Statement::If {
+            condition,
+            then,
+            else_,
+        } => emit_statement_if(condition, then, else_, instructions, id_gen),
         ast_c::Statement::Null => None,
     }
+}
+
+fn emit_statement_if(
+    condition: &ast_c::Expression,
+    then: &ast_c::Statement,
+    else_: &Option<Box<ast_c::Statement>>,
+    instructions: &mut Vec<Instruction>,
+    id_gen: &mut IdGenerator,
+) -> Option<Instruction> {
+    // if (condition) { then }:
+    //   <instructions for condition>
+    //   c = <result of condition>
+    //   JumpIfZero(c, end)
+    //   <instructions for then-statement>
+    //   Label(end)
+    //
+    // if (condition) { then } else { else_ }:
+    //   <instructions for condition>
+    //   c = <result of condition>
+    //   JumpIfZero(c, else_label)
+    //   <instructions for then-statement>
+    //   Jump(end)
+    //   Label(else_label)
+    //   <instructions for else-statement>
+    //   Label(end)
+
+    let label_else: Identifier = format!("if_else.{}", id_gen.next()).into();
+    let label_end: Identifier = format!("if_end.{}", id_gen.next()).into();
+
+    // if:
+    let cond_val = emit_tacky(condition, instructions, id_gen);
+
+    instructions.push(Instruction::JumpIfZero {
+        condition: cond_val.clone(),
+        target: if else_.is_none() {
+            label_end.clone()
+        } else {
+            label_else.clone()
+        },
+    });
+
+    // then:
+    if let Some(instruction) = emit_statement(then, instructions, id_gen) {
+        instructions.push(instruction);
+    }
+
+    if let Some(else_stmt) = else_ {
+        // Jump to end after "then"
+        instructions.push(Instruction::Jump {
+            target: label_end.clone(),
+        });
+
+        // else:
+        instructions.push(Instruction::Label(label_else));
+
+        if let Some(instruction) = emit_statement(else_stmt, instructions, id_gen) {
+            instructions.push(instruction);
+        }
+    }
+
+    instructions.push(Instruction::Label(label_end));
+
+    // No return value for if statements
+    None
+}
+
+fn emit_exp_conditional(
+    condition: &ast_c::Expression,
+    e1: &ast_c::Expression,
+    e2: &ast_c::Expression,
+    instructions: &mut Vec<Instruction>,
+    id_gen: &mut IdGenerator,
+) -> Val {
+    // <instructions for condition>
+    // c = <result of condition>
+    // JumpIfZero(c, e2_label)
+    // <instructions to calculate e1>
+    // v1 = <result of e1>
+    // result = v1
+    // Jump(end)
+    // Label(e2_label)
+    // <instructions to calculate e2>
+    // v2 = <result of e2>
+    // result = v2
+    // Label(end)
+
+    let label_e2: Identifier = format!("cond_e2.{}", id_gen.next()).into();
+    let label_end: Identifier = format!("cond_end.{}", id_gen.next()).into();
+
+    let c = Val::Var(next_var(id_gen));
+    let v1 = Val::Var(next_var(id_gen));
+    let v2 = Val::Var(next_var(id_gen));
+    let result = Val::Var(next_var(id_gen));
+
+    // <instructions for condition>
+    // c = <result of condition>
+    let c_val = emit_tacky(condition, instructions, id_gen);
+    instructions.push(Instruction::Copy {
+        src: c_val,
+        dst: c.clone(),
+    });
+
+    // JumpIfZero(c, e2_label)
+    instructions.push(Instruction::JumpIfZero {
+        condition: c,
+        target: label_e2.clone(),
+    });
+
+    // e1:
+    let val_e1 = emit_tacky(e1, instructions, id_gen);
+
+    // v1 = <result of e1>
+    instructions.push(Instruction::Copy {
+        src: val_e1.clone(),
+        dst: v1.clone(),
+    });
+
+    // result = v1
+    instructions.push(Instruction::Copy {
+        src: v1,
+        dst: result.clone(),
+    });
+
+    // Jump(end)
+    instructions.push(Instruction::Jump {
+        target: label_end.clone(),
+    });
+
+    // Label(e2_label)
+    instructions.push(Instruction::Label(label_e2));
+
+    // <instructions to calculate e2>
+    let val_e2 = emit_tacky(e2, instructions, id_gen);
+
+    // v2 = <result of e2>
+    instructions.push(Instruction::Copy {
+        src: val_e2,
+        dst: v2.clone(),
+    });
+
+    // result = v2
+    instructions.push(Instruction::Copy {
+        src: v2,
+        dst: result.clone(),
+    });
+
+    // Label(end)
+    instructions.push(Instruction::Label(label_end));
+
+    result
 }
 
 #[cfg(test)]
@@ -415,30 +569,22 @@ mod tests {
 
     #[test]
     fn test_emit_statement_return_constant() {
-        let statement = ast_c::Statement::Return(ast_c::Expression::Constant(2));
-        let mut instructions = vec![];
-        let mut id_gen = IdGenerator::new();
+        let (ins, instructions) =
+            do_emit_statement(&ast_c::Statement::Return(ast_c::Expression::Constant(2)));
 
-        assert_eq!(
-            emit_statement(&statement, &mut instructions, &mut id_gen).unwrap(),
-            Instruction::Return(Val::Constant(2))
-        );
+        assert_eq!(ins, Some(Instruction::Return(Val::Constant(2))));
         assert!(instructions.is_empty());
     }
 
     #[test]
     fn test_emit_statement_return_unary() {
-        let statement = ast_c::Statement::Return(ast_c::Expression::Unary(
-            ast_c::UnaryOperator::Negate,
-            Box::new(ast_c::Expression::Constant(2)),
-        ));
-        let mut instructions = vec![];
-        let mut id_gen = IdGenerator::new();
+        let (ins, instructions) =
+            do_emit_statement(&ast_c::Statement::Return(ast_c::Expression::Unary(
+                ast_c::UnaryOperator::Negate,
+                Box::new(ast_c::Expression::Constant(2)),
+            )));
 
-        assert_eq!(
-            emit_statement(&statement, &mut instructions, &mut id_gen).unwrap(),
-            Instruction::Return(Val::Var("tmp.0".into()))
-        );
+        assert_eq!(ins, Some(Instruction::Return(Val::Var("tmp.0".into()))));
         assert_eq!(
             instructions,
             vec![Instruction::Unary {
@@ -451,16 +597,15 @@ mod tests {
 
     #[test]
     fn test_emit_statement_expression() {
-        let statement = ast_c::Statement::Expression(ast_c::Expression::Binary(
-            ast_c::BinaryOperator::Add,
-            Box::new(ast_c::Expression::Constant(1)),
-            Box::new(ast_c::Expression::Constant(2)),
-        ));
-        let mut instructions = vec![];
-        let mut id_gen = IdGenerator::new();
+        let (ins, instructions) =
+            do_emit_statement(&ast_c::Statement::Expression(ast_c::Expression::Binary(
+                ast_c::BinaryOperator::Add,
+                Box::new(ast_c::Expression::Constant(1)),
+                Box::new(ast_c::Expression::Constant(2)),
+            )));
 
         // No return value for expression statement
-        assert!(emit_statement(&statement, &mut instructions, &mut id_gen).is_none(),);
+        assert!(ins.is_none());
 
         // But the expression is still evaluated
         assert_eq!(
@@ -597,6 +742,13 @@ mod tests {
         let mut id_gen = IdGenerator::new();
         let val = emit_tacky(exp, &mut instructions, &mut id_gen);
         (val, instructions)
+    }
+
+    fn do_emit_statement(stmt: &ast_c::Statement) -> (Option<Instruction>, Vec<Instruction>) {
+        let mut instructions = vec![];
+        let mut id_gen = IdGenerator::new();
+        let ins = emit_statement(stmt, &mut instructions, &mut id_gen);
+        (ins, instructions)
     }
 
     #[test]
@@ -1084,6 +1236,180 @@ mod tests {
                     ],
                 }
             }
+        );
+    }
+
+    #[test]
+    fn test_emit_statement_if() {
+        // if (1 + 2) {
+        //     return 1;
+        // }
+        let (ins, instructions) = do_emit_statement(&ast_c::Statement::If {
+            condition: ast_c::Expression::Binary(
+                ast_c::BinaryOperator::Add,
+                Box::new(ast_c::Expression::Constant(1)),
+                Box::new(ast_c::Expression::Constant(2)),
+            ),
+            then: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(1))),
+            else_: None,
+        });
+
+        // Expected TACKY:
+        //   <instructions for condition>
+        //   c = <result of condition>
+        //   JumpIfZero(c, end)
+        //   <instructions for statement>
+        //   Label(end)
+        assert_eq!(ins, None);
+        assert_eq!(
+            instructions,
+            vec![
+                // <instructions for condition>
+                // c = <result of condition>
+                Instruction::Binary {
+                    op: BinaryOperator::Add,
+                    src1: Val::Constant(1),
+                    src2: Val::Constant(2),
+                    dst: Val::Var("tmp.2".into()), // c
+                },
+                Instruction::JumpIfZero {
+                    condition: Val::Var("tmp.2".into()),
+                    target: "if_end.1".into(),
+                },
+                // instructions for statement
+                Instruction::Return(Val::Constant(1)),
+                // Label(end)
+                Instruction::Label("if_end.1".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_emit_statement_if_else() {
+        // if (1 + 2) {
+        //     return 1;
+        // } else {
+        //     return 2;
+        // }
+        let (ins, instructions) = do_emit_statement(&ast_c::Statement::If {
+            condition: ast_c::Expression::Binary(
+                ast_c::BinaryOperator::Add,
+                Box::new(ast_c::Expression::Constant(1)),
+                Box::new(ast_c::Expression::Constant(2)),
+            ),
+            then: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(1))),
+            else_: Some(Box::new(ast_c::Statement::Return(
+                ast_c::Expression::Constant(2),
+            ))),
+        });
+
+        // Expected TACKY:
+        //   <instructions for condition>
+        //   c = <result of condition>
+        //   JumpIfZero(c, else_label)
+        //   <instructions for then-statement>
+        //   Jump(end)
+        //   Label(else_label)
+        //   <instructions for else-statement2>
+        //   Label(end)
+        assert_eq!(ins, None);
+        assert_eq!(
+            instructions,
+            vec![
+                // <instructions for condition>
+                // c = <result of condition>
+                Instruction::Binary {
+                    op: BinaryOperator::Add,
+                    src1: Val::Constant(1),
+                    src2: Val::Constant(2),
+                    dst: Val::Var("tmp.2".into()), // c
+                },
+                Instruction::JumpIfZero {
+                    condition: Val::Var("tmp.2".into()),
+                    target: "if_else.0".into(),
+                },
+                // instructions for then-statement
+                Instruction::Return(Val::Constant(1)),
+                Instruction::Jump {
+                    target: "if_end.1".into(),
+                },
+                // Label(else)
+                Instruction::Label("if_else.0".into()),
+                // instructions for else-statement
+                Instruction::Return(Val::Constant(2)),
+                // Label(end)
+                Instruction::Label("if_end.1".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_emit_conditional() {
+        // Page 127
+        // 1 ? 2 : 3
+        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Conditional(
+            Box::new(ast_c::Expression::Constant(1)),
+            Box::new(ast_c::Expression::Constant(2)),
+            Box::new(ast_c::Expression::Constant(3)),
+        ));
+
+        // Expected TACKY (Listing 6-14):
+        //   <instructions for condition>
+        //   c = <result of condition>
+        //   JumpIfZero(c, e2_label)
+        //   <instructions to calculate e1>
+        //   v1 = <result of e1>
+        //   result = v1
+        //   Jump(end)
+        //   Label(e2_label)
+        //   <instructions to calculate e2>
+        //   v2 = <result of e2>
+        //   result = v2
+        //   Label(end)
+        assert_eq!(val, Val::Var("tmp.5".into())); // result
+        assert_eq!(
+            instructions,
+            vec![
+                // <instructions for condition>
+                // c = <result of condition>
+                Instruction::Copy {
+                    src: Val::Constant(1),
+                    dst: Val::Var("tmp.2".into()), // c
+                },
+                Instruction::JumpIfZero {
+                    condition: Val::Var("tmp.2".into()),
+                    target: "cond_e2.0".into(),
+                },
+                // instructions for e1-expression
+                // v1 = <result of e1>
+                Instruction::Copy {
+                    src: Val::Constant(2),
+                    dst: Val::Var("tmp.3".into()), // v1
+                },
+                // result = v1
+                Instruction::Copy {
+                    src: Val::Var("tmp.3".into()),
+                    dst: Val::Var("tmp.5".into()), // result
+                },
+                Instruction::Jump {
+                    target: "cond_end.1".into(),
+                },
+                // Label(e2)
+                Instruction::Label("cond_e2.0".into()),
+                // instructions for e2-expression
+                // v2 = <result of e2>
+                Instruction::Copy {
+                    src: Val::Constant(3),
+                    dst: Val::Var("tmp.4".into()), // v2
+                },
+                // result = v2
+                Instruction::Copy {
+                    src: Val::Var("tmp.4".into()),
+                    dst: Val::Var("tmp.5".into()), // result
+                },
+                // Label(end)
+                Instruction::Label("cond_end.1".into()),
+            ]
         );
     }
 }
