@@ -1,2 +1,5 @@
 /target
 book-tests
+a.out
+gcc.*
+
