@@ -342,7 +342,7 @@ fn emit_statement(
             });
             None
         }
-        ast_c::Statement::Compound(block) => {
+        ast_c::Statement::Compound(_) => {
             todo!()
         }
         ast_c::Statement::Null => None,

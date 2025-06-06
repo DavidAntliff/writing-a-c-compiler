@@ -1,4 +1,4 @@
-use crate::ast_c::{BlockItem, Declaration, Expression, Function, Program, Statement};
+use crate::ast_c::{Block, BlockItem, Declaration, Expression, Function, Program, Statement};
 use crate::id_gen::IdGenerator;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -34,79 +34,69 @@ pub(crate) fn analyse(program: &mut Program) -> Result<(), Error> {
 }
 
 fn variable_resolution(program: &mut Program) -> Result<(), Error> {
-    let mut variable_map = HashMap::<String, String>::new();
+    let mut variable_map = HashMap::<String, MapEntry>::new();
     let mut id_gen = IdGenerator::new();
 
     // TODO: for globals, and for each function:
-    program
-        .function
-        .body
-        .items
-        .iter_mut()
-        .try_for_each(|item| match item {
-            BlockItem::S(statement) => {
-                *statement = resolve_statement(statement, &mut variable_map)?;
-                Ok(())
-            }
-            BlockItem::D(declaration) => {
-                *declaration = resolve_declaration(declaration, &mut variable_map, &mut id_gen)?;
-                Ok(())
-            }
-        })
+    program.function.body = resolve_block(&program.function.body, &mut variable_map, &mut id_gen)?;
+
+    Ok(())
 }
 
 fn unique_name(source_name: &str, id_gen: &mut IdGenerator) -> String {
     format!("{source_name}.{}", id_gen.next())
 }
 
-fn resolve_statement(
-    statement: &Statement,
-    variable_map: &mut HashMap<String, String>,
-) -> Result<Statement, Error> {
-    match statement {
-        Statement::Return(exp) => Ok(Statement::Return(resolve_exp(exp, variable_map)?)),
-        Statement::Expression(exp) => Ok(Statement::Expression(resolve_exp(exp, variable_map)?)),
-        Statement::If {
-            condition,
-            then,
-            else_,
-        } => {
-            let else_ = if let Some(else_stmt) = else_ {
-                Some(Box::new(resolve_statement(else_stmt, variable_map)?))
-            } else {
-                None
-            };
-            Ok(Statement::If {
-                condition: resolve_exp(condition, variable_map)?,
-                then: Box::new(resolve_statement(then, variable_map)?),
-                else_,
-            })
+#[derive(Debug, Clone)]
+struct MapEntry {
+    unique_name: String,
+    from_current_block: bool,
+}
+
+fn resolve_block(
+    block: &Block,
+    variable_map: &mut HashMap<String, MapEntry>,
+    id_gen: &mut IdGenerator,
+) -> Result<Block, Error> {
+    let mut items = Vec::new();
+    for item in &block.items {
+        match item {
+            BlockItem::S(statement) => {
+                items.push(BlockItem::S(resolve_statement(
+                    statement,
+                    variable_map,
+                    id_gen,
+                )?));
+            }
+            BlockItem::D(declaration) => {
+                items.push(BlockItem::D(resolve_declaration(
+                    declaration,
+                    variable_map,
+                    id_gen,
+                )?));
+            }
         }
-        Statement::Labeled { label, statement } => {
-            resolve_statement(statement, variable_map).map(|stmt| Statement::Labeled {
-                label: label.clone(),
-                statement: Box::new(stmt),
-            })
-        }
-        Statement::Goto(identifier) => Ok(Statement::Goto(identifier.clone())),
-        Statement::Compound(block) => {
-            todo!()
-        }
-        Statement::Null => Ok(Statement::Null),
     }
+    Ok(Block { items })
 }
 
 fn resolve_declaration(
     Declaration { name, init }: &Declaration,
-    variable_map: &mut HashMap<String, String>,
+    variable_map: &mut HashMap<String, MapEntry>,
     id_gen: &mut IdGenerator,
 ) -> Result<Declaration, Error> {
-    if variable_map.contains_key(name) {
+    if variable_map.contains_key(name) && variable_map[name].from_current_block {
         return Err(Error::DuplicateVariableDeclaration(name.clone()));
     }
 
     let unique_name = unique_name(name, id_gen);
-    variable_map.insert(name.clone(), unique_name.clone());
+    variable_map.insert(
+        name.clone(),
+        MapEntry {
+            unique_name: unique_name.clone(),
+            from_current_block: true,
+        },
+    );
 
     let init = if let Some(init) = init {
         Some(resolve_exp(init, variable_map)?)
@@ -120,15 +110,80 @@ fn resolve_declaration(
     })
 }
 
+fn resolve_statement(
+    statement: &Statement,
+    variable_map: &mut HashMap<String, MapEntry>,
+    id_gen: &mut IdGenerator,
+) -> Result<Statement, Error> {
+    match statement {
+        Statement::Return(exp) => Ok(Statement::Return(resolve_exp(exp, variable_map)?)),
+        Statement::Expression(exp) => Ok(Statement::Expression(resolve_exp(exp, variable_map)?)),
+        Statement::If {
+            condition,
+            then,
+            else_,
+        } => {
+            let else_ = if let Some(else_stmt) = else_ {
+                Some(Box::new(resolve_statement(
+                    else_stmt,
+                    variable_map,
+                    id_gen,
+                )?))
+            } else {
+                None
+            };
+            Ok(Statement::If {
+                condition: resolve_exp(condition, variable_map)?,
+                then: Box::new(resolve_statement(then, variable_map, id_gen)?),
+                else_,
+            })
+        }
+        Statement::Labeled { label, statement } => {
+            resolve_statement(statement, variable_map, id_gen).map(|stmt| Statement::Labeled {
+                label: label.clone(),
+                statement: Box::new(stmt),
+            })
+        }
+        Statement::Goto(identifier) => Ok(Statement::Goto(identifier.clone())),
+        Statement::Compound(block) => {
+            let mut new_variable_map = copy_variable_map(variable_map);
+            Ok(Statement::Compound(resolve_block(
+                block,
+                &mut new_variable_map,
+                id_gen,
+            )?))
+        }
+        Statement::Null => Ok(Statement::Null),
+    }
+}
+
+fn copy_variable_map(variable_map: &HashMap<String, MapEntry>) -> HashMap<String, MapEntry> {
+    // clone the hashmap but reset the `from_current_block` flag
+    variable_map
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                MapEntry {
+                    unique_name: v.unique_name.clone(),
+                    from_current_block: false,
+                },
+            )
+        })
+        .collect()
+}
+
 fn resolve_exp(
     exp: &Expression,
-    variable_map: &mut HashMap<String, String>,
+    variable_map: &mut HashMap<String, MapEntry>,
 ) -> Result<Expression, Error> {
     match exp {
         Expression::Constant(_) => Ok(exp.clone()),
         Expression::Var(v) => {
             if variable_map.contains_key(v) {
-                Ok(Expression::Var(variable_map.get(v).unwrap().clone()))
+                Ok(Expression::Var(
+                    variable_map.get(v).unwrap().unique_name.clone(),
+                ))
             } else {
                 Err(Error::UndeclaredVariable(v.clone()))
             }
@@ -202,10 +257,11 @@ fn nested_labels(statement: &Statement) -> Vec<String> {
             }
             labels
         }
-        Statement::Compound(block) => {
-            todo!()
+        Statement::Compound(_) => {
+            // must be unique within a function, not a scope
+            vec![]
         }
-        Statement::Return(_) // explicit
+        Statement::Return(_) // explicit listing of all variants
         | Statement::Expression(_)
         | Statement::Goto(_)
         | Statement::Null => {
