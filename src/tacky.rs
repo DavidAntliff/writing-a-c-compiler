@@ -125,7 +125,7 @@ pub(crate) fn parse(program: &ast_c::Program) -> Result<Program, TackyError> {
     let mut body = vec![];
     let mut id_gen = IdGenerator::new();
 
-    for block_item in &program.function.body {
+    for block_item in &program.function.body.items {
         match block_item {
             ast_c::BlockItem::S(statement) => {
                 let val = emit_statement(statement, &mut body, &mut id_gen);
@@ -342,6 +342,9 @@ fn emit_statement(
             });
             None
         }
+        ast_c::Statement::Compound(block) => {
+            todo!()
+        }
         ast_c::Statement::Null => None,
     }
 }
@@ -499,6 +502,7 @@ fn emit_exp_conditional(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast_c::Block;
 
     #[test]
     fn test_emit_tacky_constant_expression() {
@@ -635,18 +639,20 @@ mod tests {
         let program = ast_c::Program {
             function: ast_c::Function {
                 name: "main".into(),
-                body: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
-                    ast_c::Expression::Unary(
-                        ast_c::UnaryOperator::Negate,
-                        Box::new(ast_c::Expression::Unary(
-                            ast_c::UnaryOperator::Complement,
+                body: Block {
+                    items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
+                        ast_c::Expression::Unary(
+                            ast_c::UnaryOperator::Negate,
                             Box::new(ast_c::Expression::Unary(
-                                ast_c::UnaryOperator::Negate,
-                                Box::new(ast_c::Expression::Constant(8)),
+                                ast_c::UnaryOperator::Complement,
+                                Box::new(ast_c::Expression::Unary(
+                                    ast_c::UnaryOperator::Negate,
+                                    Box::new(ast_c::Expression::Constant(8)),
+                                )),
                             )),
-                        )),
-                    ),
-                ))],
+                        ),
+                    ))],
+                },
             },
         };
 
@@ -674,7 +680,7 @@ mod tests {
                         Instruction::Return(Val::Var("tmp.2".into())),
                         // Default Return(0)
                         Instruction::Return(Val::Constant(0)),
-                    ],
+                    ]
                 }
             }
         );
@@ -686,25 +692,27 @@ mod tests {
         let program = ast_c::Program {
             function: ast_c::Function {
                 name: "main".into(),
-                body: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
-                    ast_c::Expression::Binary(
-                        ast_c::BinaryOperator::Subtract,
-                        Box::new(ast_c::Expression::Binary(
-                            ast_c::BinaryOperator::Multiply,
-                            Box::new(ast_c::Expression::Constant(1)),
-                            Box::new(ast_c::Expression::Constant(2)),
-                        )),
-                        Box::new(ast_c::Expression::Binary(
-                            ast_c::BinaryOperator::Multiply,
-                            Box::new(ast_c::Expression::Constant(3)),
+                body: Block {
+                    items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
+                        ast_c::Expression::Binary(
+                            ast_c::BinaryOperator::Subtract,
                             Box::new(ast_c::Expression::Binary(
-                                ast_c::BinaryOperator::Add,
-                                Box::new(ast_c::Expression::Constant(4)),
-                                Box::new(ast_c::Expression::Constant(5)),
+                                ast_c::BinaryOperator::Multiply,
+                                Box::new(ast_c::Expression::Constant(1)),
+                                Box::new(ast_c::Expression::Constant(2)),
                             )),
-                        )),
-                    ),
-                ))],
+                            Box::new(ast_c::Expression::Binary(
+                                ast_c::BinaryOperator::Multiply,
+                                Box::new(ast_c::Expression::Constant(3)),
+                                Box::new(ast_c::Expression::Binary(
+                                    ast_c::BinaryOperator::Add,
+                                    Box::new(ast_c::Expression::Constant(4)),
+                                    Box::new(ast_c::Expression::Constant(5)),
+                                )),
+                            )),
+                        ),
+                    ))],
+                },
             },
         };
 
@@ -1168,37 +1176,39 @@ mod tests {
         let program = ast_c::Program {
             function: ast_c::Function {
                 name: "main".into(),
-                body: vec![
-                    // int b;
-                    ast_c::BlockItem::D(ast_c::Declaration {
-                        name: "b.98".into(),
-                        init: None,
-                    }),
-                    // int a = 10 + 1;
-                    ast_c::BlockItem::D(ast_c::Declaration {
-                        name: "a.99".into(),
-                        init: Some(ast_c::Expression::Binary(
-                            ast_c::BinaryOperator::Add,
-                            Box::new(ast_c::Expression::Constant(10)),
-                            Box::new(ast_c::Expression::Constant(1)),
-                        )),
-                    }),
-                    // b = a * 2;
-                    ast_c::BlockItem::S(ast_c::Statement::Expression(
-                        ast_c::Expression::Assignment(
-                            Box::new(ast_c::Expression::Var("b.98".into())),
-                            Box::new(ast_c::Expression::Binary(
-                                ast_c::BinaryOperator::Multiply,
-                                Box::new(ast_c::Expression::Var("a.99".into())),
-                                Box::new(ast_c::Expression::Constant(2)),
+                body: Block {
+                    items: vec![
+                        // int b;
+                        ast_c::BlockItem::D(ast_c::Declaration {
+                            name: "b.98".into(),
+                            init: None,
+                        }),
+                        // int a = 10 + 1;
+                        ast_c::BlockItem::D(ast_c::Declaration {
+                            name: "a.99".into(),
+                            init: Some(ast_c::Expression::Binary(
+                                ast_c::BinaryOperator::Add,
+                                Box::new(ast_c::Expression::Constant(10)),
+                                Box::new(ast_c::Expression::Constant(1)),
                             )),
-                        ),
-                    )),
-                    // return b;
-                    ast_c::BlockItem::S(ast_c::Statement::Return(ast_c::Expression::Var(
-                        "b.98".into(),
-                    ))),
-                ],
+                        }),
+                        // b = a * 2;
+                        ast_c::BlockItem::S(ast_c::Statement::Expression(
+                            ast_c::Expression::Assignment(
+                                Box::new(ast_c::Expression::Var("b.98".into())),
+                                Box::new(ast_c::Expression::Binary(
+                                    ast_c::BinaryOperator::Multiply,
+                                    Box::new(ast_c::Expression::Var("a.99".into())),
+                                    Box::new(ast_c::Expression::Constant(2)),
+                                )),
+                            ),
+                        )),
+                        // return b;
+                        ast_c::BlockItem::S(ast_c::Statement::Return(ast_c::Expression::Var(
+                            "b.98".into(),
+                        ))),
+                    ],
+                },
             },
         };
 
@@ -1434,27 +1444,29 @@ mod tests {
         let program = ast_c::Program {
             function: ast_c::Function {
                 name: "main".into(),
-                body: vec![
-                    ast_c::BlockItem::S(ast_c::Statement::Goto("label1".into())),
-                    ast_c::BlockItem::S(ast_c::Statement::Labeled {
-                        label: "label0".into(),
-                        statement: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
-                            0,
-                        ))),
-                    }),
-                    ast_c::BlockItem::S(ast_c::Statement::Labeled {
-                        label: "label1".into(),
-                        statement: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
-                            1,
-                        ))),
-                    }),
-                    ast_c::BlockItem::S(ast_c::Statement::Labeled {
-                        label: "label2".into(),
-                        statement: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
-                            2,
-                        ))),
-                    }),
-                ],
+                body: Block {
+                    items: vec![
+                        ast_c::BlockItem::S(ast_c::Statement::Goto("label1".into())),
+                        ast_c::BlockItem::S(ast_c::Statement::Labeled {
+                            label: "label0".into(),
+                            statement: Box::new(ast_c::Statement::Return(
+                                ast_c::Expression::Constant(0),
+                            )),
+                        }),
+                        ast_c::BlockItem::S(ast_c::Statement::Labeled {
+                            label: "label1".into(),
+                            statement: Box::new(ast_c::Statement::Return(
+                                ast_c::Expression::Constant(1),
+                            )),
+                        }),
+                        ast_c::BlockItem::S(ast_c::Statement::Labeled {
+                            label: "label2".into(),
+                            statement: Box::new(ast_c::Statement::Return(
+                                ast_c::Expression::Constant(2),
+                            )),
+                        }),
+                    ],
+                },
             },
         };
 

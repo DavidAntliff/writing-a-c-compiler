@@ -2,7 +2,8 @@
 //!
 //! Grammar:
 //!   <program> ::= <function>
-//!   <function> ::= "int" <identifier> "(" "void" ")" "{" { <block-item> } "}"
+//!   <function> ::= "int" <identifier> "(" "void" ")" "{" { <block> } "}"
+//!   <block> ::= "{" { <block-item> } "}"
 //!   <block-item> ::= <statement> | <declaration>
 //!   <declaration> ::= "int" <identifier> [ "=" <exp> ] ";"
 //!   <statement> ::= [ <identifier> ":" ] <statement>
@@ -10,6 +11,7 @@
 //!                     | <exp> ";"
 //!                     | "if" "(" <exp> ")" <statement> [ "else" <statement> ]
 //!                     | "goto" <identifier> ";"
+//!                     | <block>
 //!                     | ";"
 //!   <exp> := <factor>
 //!          | <exp> <binop> <exp>
@@ -25,7 +27,8 @@
 //!
 
 use crate::ast_c::{
-    BinaryOperator, BlockItem, Declaration, Expression, Function, Program, Statement, UnaryOperator,
+    BinaryOperator, Block, BlockItem, Declaration, Expression, Function, Program, Statement,
+    UnaryOperator,
 };
 use crate::lexer::{Keyword, Token, TokenKind};
 use thiserror::Error;
@@ -188,19 +191,28 @@ fn function(i: &mut Tokens<'_>) -> winnow::Result<Function> {
         .context(StrContext::Expected(StrContextValue::StringLiteral(")")))
         .parse_next(i)?;
 
-    literal(TokenKind::OpenBrace)
+    let body = block
         .context(StrContext::Label("function"))
-        .context(StrContext::Expected(StrContextValue::StringLiteral("{")))
-        .parse_next(i)?;
-
-    let (body, _) = repeat_till(0.., block_item, literal(TokenKind::CloseBrace))
-        .context(StrContext::Label("function"))
-        .context(StrContext::Expected(StrContextValue::Description(
-            "block_item",
-        )))
+        .context(StrContext::Expected(StrContextValue::Description("block")))
         .parse_next(i)?;
 
     Ok(Function { name, body })
+}
+
+fn block(i: &mut Tokens<'_>) -> winnow::Result<Block> {
+    literal(TokenKind::OpenBrace)
+        .context(StrContext::Label("block"))
+        .context(StrContext::Expected(StrContextValue::StringLiteral("{")))
+        .parse_next(i)?;
+
+    let (items, _) = repeat_till(0.., block_item, literal(TokenKind::CloseBrace))
+        .context(StrContext::Label("block"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "block item",
+        )))
+        .parse_next(i)?;
+
+    Ok(Block { items })
 }
 
 fn block_item(i: &mut Tokens<'_>) -> winnow::Result<BlockItem> {
@@ -315,6 +327,9 @@ fn statement2(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
         },
         &Token { kind: TokenKind::Keyword(Keyword::Goto), .. } => {
             statement_goto
+        },
+        &Token { kind: TokenKind::OpenBrace, .. } => {
+            block.map(Statement::Compound)
         },
         &Token { kind: TokenKind::Semicolon, .. } => any.value(Statement::Null),
         _ => terminated(exp.map(Statement::Expression), literal(TokenKind::Semicolon)),
@@ -614,6 +629,34 @@ mod tests {
     use winnow::error::ParseError;
     use winnow::Parser;
 
+    fn parse_program(input: &str) -> Program {
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let result = program.parse(tokens);
+        result.expect("program should parse")
+    }
+
+    fn parse_function(input: &str) -> Function {
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let result = function.parse(tokens);
+        result.expect("function should parse")
+    }
+
+    fn parse_statement(input: &str) -> Statement {
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let result = statement.parse(tokens);
+        result.expect("statement should parse")
+    }
+
+    fn parse_expression(input: &str) -> Expression {
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let result = exp.parse(tokens);
+        result.expect("expression should parse")
+    }
+
     #[test]
     fn test_bring_up() {
         let input = r#"
@@ -621,30 +664,22 @@ mod tests {
             return 2;
         }
         "#;
-        let tokens = lex(input).unwrap();
-        //dbg!(&tokens);
-        let mut tokens = Tokens::new(&tokens);
-        let _program = crate::parser::program.parse_next(&mut tokens);
-        //dbg!(&program);
+        let _ = parse_program(input);
     }
 
     #[test]
     fn test_expression_constant() {
         let input = r#"2"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let expression = exp.parse(tokens).unwrap();
-        assert_eq!(expression, Expression::Constant(2));
+        let ast = parse_expression(input);
+        assert_eq!(ast, Expression::Constant(2));
     }
 
     #[test]
     fn test_expression_bitwise_complement() {
         let input = r#"~2"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let expression = exp.parse(tokens).unwrap();
+        let ast = parse_expression(input);
         assert_eq!(
-            expression,
+            ast,
             Expression::Unary(UnaryOperator::Complement, Box::new(Expression::Constant(2)))
         );
     }
@@ -652,11 +687,9 @@ mod tests {
     #[test]
     fn test_expression_negation() {
         let input = r#"-3"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let expression = exp.parse(tokens).unwrap();
+        let ast = parse_expression(input);
         assert_eq!(
-            expression,
+            ast,
             Expression::Unary(UnaryOperator::Negate, Box::new(Expression::Constant(3)))
         );
     }
@@ -664,12 +697,9 @@ mod tests {
     #[test]
     fn test_expression_complement_of_negation() {
         let input = r#"~(-4)"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        eprintln!("***");
-        let expression = exp.parse(tokens).unwrap();
+        let ast = parse_expression(input);
         assert_eq!(
-            expression,
+            ast,
             Expression::Unary(
                 UnaryOperator::Complement,
                 Box::new(Expression::Unary(
@@ -693,11 +723,9 @@ mod tests {
     fn test_expression_precedence_1() {
         // Figure 3-1
         let input = r#"1 + (2 * 3)"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let expression = exp.parse(tokens).expect("should parse");
+        let ast = parse_expression(input);
         assert_eq!(
-            expression,
+            ast,
             Expression::Binary(
                 BinaryOperator::Add,
                 Box::new(Expression::Constant(1)),
@@ -714,11 +742,9 @@ mod tests {
     fn test_expression_precedence_2() {
         // Figure 3-2
         let input = r#"(1 + 2) * 3"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let expression = exp.parse(tokens).expect("should parse");
+        let ast = parse_expression(input);
         assert_eq!(
-            expression,
+            ast,
             Expression::Binary(
                 BinaryOperator::Multiply,
                 Box::new(Expression::Binary(
@@ -734,11 +760,9 @@ mod tests {
     fn test_expression_precedence_3() {
         // Page 55: 1 * 2 - 3 * (4 + 5)
         let input = r#"1 * 2 - 3 * (4 + 5)"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let expression = exp.parse(tokens).expect("should parse");
+        let ast = parse_expression(input);
         assert_eq!(
-            expression,
+            ast,
             Expression::Binary(
                 BinaryOperator::Subtract,
                 Box::new(Expression::Binary(
@@ -765,11 +789,9 @@ mod tests {
         // Equivalent to:
         // (80 >> 2) | (1 ^ (5 & (7 << 1)))
         let input = r#"80 >> 2 | 1 ^ 5 & 7 << 1"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let expression = exp.parse(tokens).expect("should parse");
+        let ast = parse_expression(input);
         assert_eq!(
-            expression,
+            ast,
             Expression::Binary(
                 BinaryOperator::BitOr,
                 Box::new(Expression::Binary(
@@ -800,11 +822,9 @@ mod tests {
         // Equivalent to:
         // !((80 && (2 == 1)) || ((5 <= 7) && (2 > 1)))
         let input = r#"!(80 && 2 == 1 || 5 <= 7 && 2 > 1)"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let expression = exp.parse(tokens).expect("should parse");
+        let ast = parse_expression(input);
         assert_eq!(
-            expression,
+            ast,
             Expression::Unary(
                 UnaryOperator::Not,
                 Box::new(Expression::Binary(
@@ -845,30 +865,30 @@ mod tests {
             a = 2;
             return a * 2;
         }"#;
-        let tokens = lex(input).unwrap();
-        let mut tokens = Tokens::new(&tokens);
-        let program = program.parse_next(&mut tokens).expect("should parse");
+        let ast = parse_program(input);
 
         assert_eq!(
-            program,
+            ast,
             Program {
                 function: Function {
                     name: "main".into(),
-                    body: vec![
-                        BlockItem::D(Declaration {
-                            name: "a".into(),
-                            init: None,
-                        }),
-                        BlockItem::S(Statement::Expression(Expression::Assignment(
-                            Box::new(Expression::Var("a".into())),
-                            Box::new(Expression::Constant(2))
-                        ))),
-                        BlockItem::S(Statement::Return(Expression::Binary(
-                            BinaryOperator::Multiply,
-                            Box::new(Expression::Var("a".into())),
-                            Box::new(Expression::Constant(2))
-                        )))
-                    ],
+                    body: Block {
+                        items: vec![
+                            BlockItem::D(Declaration {
+                                name: "a".into(),
+                                init: None,
+                            }),
+                            BlockItem::S(Statement::Expression(Expression::Assignment(
+                                Box::new(Expression::Var("a".into())),
+                                Box::new(Expression::Constant(2))
+                            ))),
+                            BlockItem::S(Statement::Return(Expression::Binary(
+                                BinaryOperator::Multiply,
+                                Box::new(Expression::Var("a".into())),
+                                Box::new(Expression::Constant(2))
+                            )))
+                        ]
+                    },
                 }
             }
         )
@@ -884,10 +904,7 @@ mod tests {
             return 1;
         else
             return 2;"#;
-
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let ast = statement.parse(tokens).expect("should parse");
+        let ast = parse_statement(input);
 
         assert_eq!(
             ast,
@@ -915,9 +932,7 @@ mod tests {
     fn test_parse_ternary_1() {
         // Page 122
         let input = r#"a = 1 ? 2 : 3"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let ast = exp.parse(tokens).expect("should parse");
+        let ast = parse_expression(input);
 
         assert_eq!(
             ast,
@@ -936,9 +951,7 @@ mod tests {
     fn test_parse_ternary_2() {
         // Page 122
         let input = r#"a || b ? 2 : 3"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let ast = exp.parse(tokens).expect("should parse");
+        let ast = parse_expression(input);
 
         // Parses as (a || b) ? 2 : 3
         assert_eq!(
@@ -959,9 +972,7 @@ mod tests {
     fn test_parse_ternary_3() {
         // Page 122
         let input = r#"1 ? 2 : 3 || 4"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let ast = exp.parse(tokens).expect("should parse");
+        let ast = parse_expression(input);
 
         // Parses as 1 ? 2 : (3 || 4)
         assert_eq!(
@@ -982,9 +993,7 @@ mod tests {
     fn test_parse_ternary_4() {
         // Page 122
         let input = r#"x ? x = 1 : 2"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let ast = exp.parse(tokens).expect("should parse");
+        let ast = parse_expression(input);
 
         // Parses as x ? (x = 1) : 2
         assert_eq!(
@@ -1004,9 +1013,7 @@ mod tests {
     fn test_parse_ternary_5() {
         // Page 123
         let input = r#"a ? b ? 1 : 2 : 3"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let ast = exp.parse(tokens).expect("should parse");
+        let ast = parse_expression(input);
 
         // Parses as a ? (b ? 1 : 2) : 3
         assert_eq!(
@@ -1027,9 +1034,7 @@ mod tests {
     fn test_parse_ternary_6() {
         // Page 123
         let input = r#"a ? 1 : b ? 2 : 3"#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let ast = exp.parse(tokens).expect("should parse");
+        let ast = parse_expression(input);
 
         // Parses as a ? 1 : (b ? 2 : 3)  [right associative]
         assert_eq!(
@@ -1055,25 +1060,25 @@ mod tests {
             label1: return 0;
         }
         "#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let ast = function.parse(tokens).expect("should parse");
+        let ast = parse_function(input);
 
         assert_eq!(
             ast,
             Function {
                 name: "main".into(),
-                body: vec![
-                    BlockItem::S(Statement::Goto("label1".into())),
-                    BlockItem::S(Statement::Labeled {
-                        label: "label0".into(),
-                        statement: Box::new(Statement::Null)
-                    }),
-                    BlockItem::S(Statement::Labeled {
-                        label: "label1".into(),
-                        statement: Box::new(Statement::Return(Expression::Constant(0)))
-                    })
-                ]
+                body: Block {
+                    items: vec![
+                        BlockItem::S(Statement::Goto("label1".into())),
+                        BlockItem::S(Statement::Labeled {
+                            label: "label0".into(),
+                            statement: Box::new(Statement::Null)
+                        }),
+                        BlockItem::S(Statement::Labeled {
+                            label: "label1".into(),
+                            statement: Box::new(Statement::Return(Expression::Constant(0)))
+                        })
+                    ]
+                }
             }
         );
     }
@@ -1090,25 +1095,25 @@ mod tests {
             return 0;
         }
         "#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let ast = function.parse(tokens).expect("should parse");
+        let ast = parse_function(input);
 
         assert_eq!(
             ast,
             Function {
                 name: "main".into(),
-                body: vec![
-                    BlockItem::S(Statement::Goto("labelB".into())),
-                    BlockItem::S(Statement::Labeled {
-                        label: "labelA".into(),
-                        statement: Box::new(Statement::Labeled {
-                            label: "labelB".into(),
-                            statement: Box::new(Statement::Return(Expression::Constant(5)))
-                        })
-                    }),
-                    BlockItem::S(Statement::Return(Expression::Constant(0))),
-                ]
+                body: Block {
+                    items: vec![
+                        BlockItem::S(Statement::Goto("labelB".into())),
+                        BlockItem::S(Statement::Labeled {
+                            label: "labelA".into(),
+                            statement: Box::new(Statement::Labeled {
+                                label: "labelB".into(),
+                                statement: Box::new(Statement::Return(Expression::Constant(5)))
+                            })
+                        }),
+                        BlockItem::S(Statement::Return(Expression::Constant(0))),
+                    ]
+                }
             }
         );
     }
@@ -1125,26 +1130,93 @@ mod tests {
             return 0;
         }
         "#;
-        let tokens = lex(input).unwrap();
-        let tokens = Tokens::new(&tokens);
-        let ast = function.parse(tokens).expect("should parse");
+        let ast = parse_function(input);
 
         assert_eq!(
             ast,
             Function {
                 name: "main".into(),
-                body: vec![
-                    BlockItem::S(Statement::If {
-                        condition: Expression::Constant(0),
-                        then: Box::new(Statement::Labeled {
-                            label: "label".into(),
-                            statement: Box::new(Statement::Return(Expression::Constant(5)))
+                body: Block {
+                    items: vec![
+                        BlockItem::S(Statement::If {
+                            condition: Expression::Constant(0),
+                            then: Box::new(Statement::Labeled {
+                                label: "label".into(),
+                                statement: Box::new(Statement::Return(Expression::Constant(5)))
+                            }),
+                            else_: None,
                         }),
-                        else_: None,
-                    }),
-                    BlockItem::S(Statement::Goto("label".into())),
-                    BlockItem::S(Statement::Return(Expression::Constant(0))),
-                ]
+                        BlockItem::S(Statement::Goto("label".into())),
+                        BlockItem::S(Statement::Return(Expression::Constant(0))),
+                    ]
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn test_compound_statements() {
+        // Listing 7-4: Multiple nested scopes
+        let input = r#"
+        int main(void) {
+            int x = 1;
+            {
+                int x = 2;
+                if (x > 1) {
+                    x = 3;
+                    int x = 4;
+                }
+                return x;
+            }
+            return x;
+        }
+        "#;
+        let ast = parse_function(input);
+
+        assert_eq!(
+            ast,
+            Function {
+                name: "main".into(),
+                body: Block {
+                    items: vec![
+                        BlockItem::D(Declaration {
+                            name: "x".into(),
+                            init: Some(Expression::Constant(1)),
+                        }),
+                        BlockItem::S(Statement::Compound(Block {
+                            items: vec![
+                                BlockItem::D(Declaration {
+                                    name: "x".into(),
+                                    init: Some(Expression::Constant(2)),
+                                }),
+                                BlockItem::S(Statement::If {
+                                    condition: Expression::Binary(
+                                        BinaryOperator::GreaterThan,
+                                        Box::new(Expression::Var("x".into())),
+                                        Box::new(Expression::Constant(1))
+                                    ),
+                                    then: Box::new(Statement::Compound(Block {
+                                        items: vec![
+                                            BlockItem::S(Statement::Expression(
+                                                Expression::Assignment(
+                                                    Box::new(Expression::Var("x".into())),
+                                                    Box::new(Expression::Constant(3))
+                                                )
+                                            )),
+                                            BlockItem::D(Declaration {
+                                                name: "x".into(),
+                                                init: Some(Expression::Constant(4)),
+                                            })
+                                        ]
+                                    })),
+                                    else_: None,
+                                }),
+                                BlockItem::S(Statement::Return(Expression::Var("x".into())))
+                            ]
+                        })),
+                        BlockItem::S(Statement::Return(Expression::Var("x".into())))
+                    ]
+                }
             }
         );
     }

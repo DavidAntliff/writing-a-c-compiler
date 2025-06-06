@@ -2,14 +2,16 @@
 //!
 //! ASDL:
 //!   program = Program(function_definition)
-//!   function_definition = Function(identifier name, block_item* body)
+//!   function_definition = Function(identifier name, block body)
 //!   block_item = S(statement) | D(declaration)
+//!   block = Block(block_item*)
 //!   declaration = Declaration(identifier name, exp? init)
 //!   statement = Return(exp)
 //!             | Expression(exp)
 //!             | If(exp condition, statement then, statement? else)
-//!             | LabeledStatement(identifier label, statement)
+//!             | Labeled(identifier label, statement)
 //!             | Goto(identifier label)
+//!             | Compound(block)
 //!             | Null
 //!   exp = Constant(int)
 //!       | Var(identifier)
@@ -33,16 +35,21 @@ pub(crate) struct Program {
 #[derive(Debug, PartialEq)]
 pub(crate) struct Function {
     pub(crate) name: Identifier,
-    pub(crate) body: Vec<BlockItem>,
+    pub(crate) body: Block,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct Block {
+    pub(crate) items: Vec<BlockItem>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum BlockItem {
     S(Statement),
     D(Declaration),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Declaration {
     pub(crate) name: Identifier,
     pub(crate) init: Option<Expression>,
@@ -62,6 +69,7 @@ pub(crate) enum Statement {
         statement: Box<Statement>,
     },
     Goto(Identifier),
+    Compound(Block),
     Null,
 }
 

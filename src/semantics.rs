@@ -41,6 +41,7 @@ fn variable_resolution(program: &mut Program) -> Result<(), Error> {
     program
         .function
         .body
+        .items
         .iter_mut()
         .try_for_each(|item| match item {
             BlockItem::S(statement) => {
@@ -88,6 +89,9 @@ fn resolve_statement(
             })
         }
         Statement::Goto(identifier) => Ok(Statement::Goto(identifier.clone())),
+        Statement::Compound(block) => {
+            todo!()
+        }
         Statement::Null => Ok(Statement::Null),
     }
 }
@@ -160,7 +164,7 @@ fn label_resolution(function: &Function) -> Result<(), Error> {
 
     // AST is a tree, so we need to traverse it recursively,
     // building up the labels as we go, then check for duplicates afterwards.
-    for (label_count, item) in function.body.iter().enumerate() {
+    for (label_count, item) in function.body.items.iter().enumerate() {
         if let BlockItem::S(statement) = item {
             let nested_labels = nested_labels(&statement);
             for label in nested_labels {
@@ -173,7 +177,7 @@ fn label_resolution(function: &Function) -> Result<(), Error> {
     }
 
     // Check for undeclared labels in Goto statements
-    for item in &function.body {
+    for item in &function.body.items {
         if let BlockItem::S(Statement::Goto(label)) = item {
             if !labels.contains_key(label) {
                 return Err(Error::UndeclaredLabel(label.as_str().to_owned()));
@@ -198,6 +202,9 @@ fn nested_labels(statement: &Statement) -> Vec<String> {
             }
             labels
         }
+        Statement::Compound(block) => {
+            todo!()
+        }
         Statement::Return(_) // explicit
         | Statement::Expression(_)
         | Statement::Goto(_)
@@ -210,20 +217,22 @@ fn nested_labels(statement: &Statement) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast_c::Function;
+    use crate::ast_c::{Block, Function};
 
     #[test]
     fn test_analyse() {
         let mut program = Program {
             function: Function {
                 name: "main".into(),
-                body: vec![
-                    BlockItem::D(Declaration {
-                        name: "x".into(),
-                        init: Some(Expression::Constant(42)),
-                    }),
-                    BlockItem::S(Statement::Return(Expression::Var("x".into()))),
-                ],
+                body: Block {
+                    items: vec![
+                        BlockItem::D(Declaration {
+                            name: "x".into(),
+                            init: Some(Expression::Constant(42)),
+                        }),
+                        BlockItem::S(Statement::Return(Expression::Var("x".into()))),
+                    ],
+                },
             },
         };
 
@@ -231,13 +240,15 @@ mod tests {
 
         assert_eq!(
             program.function.body,
-            vec![
-                BlockItem::D(Declaration {
-                    name: "x.0".into(),
-                    init: Some(Expression::Constant(42)),
-                }),
-                BlockItem::S(Statement::Return(Expression::Var("x.0".into()))),
-            ]
+            Block {
+                items: vec![
+                    BlockItem::D(Declaration {
+                        name: "x.0".into(),
+                        init: Some(Expression::Constant(42)),
+                    }),
+                    BlockItem::S(Statement::Return(Expression::Var("x.0".into()))),
+                ]
+            }
         );
     }
 
@@ -248,14 +259,16 @@ mod tests {
         let mut program = Program {
             function: Function {
                 name: "main".into(),
-                body: vec![
-                    BlockItem::S(Statement::Goto("label1".into())),
-                    BlockItem::S(Statement::Labeled {
-                        label: "label0".into(),
-                        statement: Box::new(Statement::Null),
-                    }),
-                    BlockItem::S(Statement::Return(Expression::Constant(0))),
-                ],
+                body: Block {
+                    items: vec![
+                        BlockItem::S(Statement::Goto("label1".into())),
+                        BlockItem::S(Statement::Labeled {
+                            label: "label0".into(),
+                            statement: Box::new(Statement::Null),
+                        }),
+                        BlockItem::S(Statement::Return(Expression::Constant(0))),
+                    ],
+                },
             },
         };
 
@@ -268,18 +281,20 @@ mod tests {
         let mut program = Program {
             function: Function {
                 name: "main".into(),
-                body: vec![
-                    BlockItem::S(Statement::Goto("label1".into())),
-                    BlockItem::S(Statement::Labeled {
-                        label: "label1".into(),
-                        statement: Box::new(Statement::Null),
-                    }),
-                    BlockItem::S(Statement::Labeled {
-                        label: "label1".into(),
-                        statement: Box::new(Statement::Null),
-                    }),
-                    BlockItem::S(Statement::Return(Expression::Constant(0))),
-                ],
+                body: Block {
+                    items: vec![
+                        BlockItem::S(Statement::Goto("label1".into())),
+                        BlockItem::S(Statement::Labeled {
+                            label: "label1".into(),
+                            statement: Box::new(Statement::Null),
+                        }),
+                        BlockItem::S(Statement::Labeled {
+                            label: "label1".into(),
+                            statement: Box::new(Statement::Null),
+                        }),
+                        BlockItem::S(Statement::Return(Expression::Constant(0))),
+                    ],
+                },
             },
         };
 
@@ -292,17 +307,19 @@ mod tests {
         let mut program = Program {
             function: Function {
                 name: "main".into(),
-                body: vec![
-                    BlockItem::S(Statement::Goto("label1".into())),
-                    BlockItem::S(Statement::Labeled {
-                        label: "label1".into(),
-                        statement: Box::new(Statement::Labeled {
+                body: Block {
+                    items: vec![
+                        BlockItem::S(Statement::Goto("label1".into())),
+                        BlockItem::S(Statement::Labeled {
                             label: "label1".into(),
-                            statement: Box::new(Statement::Null),
+                            statement: Box::new(Statement::Labeled {
+                                label: "label1".into(),
+                                statement: Box::new(Statement::Null),
+                            }),
                         }),
-                    }),
-                    BlockItem::S(Statement::Return(Expression::Constant(0))),
-                ],
+                        BlockItem::S(Statement::Return(Expression::Constant(0))),
+                    ],
+                },
             },
         };
 
