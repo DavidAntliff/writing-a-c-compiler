@@ -8,6 +8,8 @@
 //!   statement = Return(exp)
 //!             | Expression(exp)
 //!             | If(exp condition, statement then, statement? else)
+//!             | LabeledStatement(identifier label, statement)
+//!             | Goto(identifier label)
 //!             | Null
 //!   exp = Constant(int)
 //!       | Var(identifier)
@@ -20,7 +22,6 @@
 //!                   | BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
 //!                   | And | Or | Equal | NotEqual | LessThan | GreaterThan
 //!                   | LessOrEqual | GreaterOrEqual
-//!
 
 use crate::lexer::Identifier;
 
@@ -56,6 +57,11 @@ pub(crate) enum Statement {
         then: Box<Statement>,
         else_: Option<Box<Statement>>,
     },
+    Labeled {
+        label: Identifier,
+        statement: Box<Statement>,
+    },
+    Goto(Identifier),
     Null,
 }
 

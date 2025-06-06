@@ -10,8 +10,8 @@ import subprocess
 @dataclass
 class CProgram:
     path: Path
-    #expected_exit_code: int
-    #expected_stdout: str | None = None
+    expected_exit_code: int | None = None
+    expected_stdout: str | None = None
 
 # TODO: provide input (cmdline, stdin, etc.)
 
@@ -19,6 +19,7 @@ class CProgram:
 VALID_C_PROGRAMS = {
     "conditional": CProgram(Path("tests/c/valid/conditional.c"),),# 3),
     "if_else": CProgram(Path("tests/c/valid/if_else.c"),),# 3),
+    "goto": CProgram(Path("tests/c/valid/goto.c"), 9),
     "return_2": CProgram(Path("tests/c/valid/return_2.c"),),# 2),
     "return_1+2": CProgram(Path("tests/c/valid/return_1+2.c"),),# 3),
     "return_logical_ops": CProgram(Path("tests/c/valid/return_logical_ops.c"),),# 1),
@@ -74,9 +75,11 @@ def check_valid_output(c_program: CProgram):
         f"Exit codes do not match: gcc {gcc_result.returncode}, pcc {pcc_result.returncode}"
     )
 
-    # assert pcc_result.returncode == c_program.expected_exit_code, (
-    #     f"Expected exit code {c_program.expected_exit_code}, got {pcc_result.returncode}"
-    # )
+    # If expected_exit_code is provided, check it
+    if c_program.expected_exit_code is not None:
+        assert pcc_result.returncode == c_program.expected_exit_code, (
+            f"Expected exit code {c_program.expected_exit_code}, got {pcc_result.returncode}"
+        )
 
     # Check the stdout outputs match
     assert gcc_result.stdout.decode() == pcc_result.stdout.decode(), (
@@ -89,10 +92,10 @@ def check_valid_output(c_program: CProgram):
     )
 
     # Check the output
-    # if c_program.expected_stdout is not None:
-    #     assert pcc_result.stdout.decode() == c_program.expected_stdout, (
-    #         f"Expected output '{c_program.expected_stdout}', got '{pcc_result.stdout.decode()}'"
-    #     )
+    if c_program.expected_stdout is not None:
+        assert pcc_result.stdout.decode() == c_program.expected_stdout, (
+            f"Expected output '{c_program.expected_stdout}', got '{pcc_result.stdout.decode()}'"
+        )
 
 
 def check_error(c_program: InvalidCProgram):

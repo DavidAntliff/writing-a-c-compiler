@@ -1,4 +1,4 @@
-use crate::ast_c::{BlockItem, Declaration, Expression, Program, Statement};
+use crate::ast_c::{BlockItem, Declaration, Expression, Function, Program, Statement};
 use crate::id_gen::IdGenerator;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -14,12 +14,21 @@ pub enum Error {
     #[error("Invalid lvalue")]
     InvalidLValue,
 
+    #[error("Undeclared label: {0}")]
+    UndeclaredLabel(String),
+
+    #[error("Duplicate label: {0}")]
+    DuplicateLabel(String),
+
     #[error("{0}")]
     Message(String),
 }
 
 pub(crate) fn analyse(program: &mut Program) -> Result<(), Error> {
     variable_resolution(program)?;
+
+    // TODO: for each function...
+    label_resolution(&program.function)?;
 
     Ok(())
 }
@@ -28,6 +37,7 @@ fn variable_resolution(program: &mut Program) -> Result<(), Error> {
     let mut variable_map = HashMap::<String, String>::new();
     let mut id_gen = IdGenerator::new();
 
+    // TODO: for globals, and for each function:
     program
         .function
         .body
@@ -71,6 +81,13 @@ fn resolve_statement(
                 else_,
             })
         }
+        Statement::Labeled { label, statement } => {
+            resolve_statement(statement, variable_map).map(|stmt| Statement::Labeled {
+                label: label.clone(),
+                statement: Box::new(stmt),
+            })
+        }
+        Statement::Goto(identifier) => Ok(Statement::Goto(identifier.clone())),
         Statement::Null => Ok(Statement::Null),
     }
 }
@@ -138,6 +155,58 @@ fn resolve_exp(
     }
 }
 
+fn label_resolution(function: &Function) -> Result<(), Error> {
+    let mut labels = HashMap::<String, usize>::new();
+
+    // AST is a tree, so we need to traverse it recursively,
+    // building up the labels as we go, then check for duplicates afterwards.
+    for (label_count, item) in function.body.iter().enumerate() {
+        if let BlockItem::S(statement) = item {
+            let nested_labels = nested_labels(&statement);
+            for label in nested_labels {
+                if labels.contains_key(&label) {
+                    return Err(Error::DuplicateLabel(label.clone()));
+                }
+                labels.insert(label.clone(), label_count);
+            }
+        }
+    }
+
+    // Check for undeclared labels in Goto statements
+    for item in &function.body {
+        if let BlockItem::S(Statement::Goto(label)) = item {
+            if !labels.contains_key(label) {
+                return Err(Error::UndeclaredLabel(label.as_str().to_owned()));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn nested_labels(statement: &Statement) -> Vec<String> {
+    match statement {
+        Statement::Labeled { label, statement } => {
+            let mut labels = vec![label.clone()];
+            labels.extend(nested_labels(statement));
+            labels
+        }
+        Statement::If { then, else_, .. } => {
+            let mut labels = nested_labels(then);
+            if let Some(else_stmt) = else_ {
+                labels.extend(nested_labels(else_stmt));
+            }
+            labels
+        }
+        Statement::Return(_) // explicit
+        | Statement::Expression(_)
+        | Statement::Goto(_)
+        | Statement::Null => {
+            vec![]
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +239,73 @@ mod tests {
                 BlockItem::S(Statement::Return(Expression::Var("x.0".into()))),
             ]
         );
+    }
+
+    #[test]
+    fn test_goto_undeclared_label() {
+        // check for undeclared label
+
+        let mut program = Program {
+            function: Function {
+                name: "main".into(),
+                body: vec![
+                    BlockItem::S(Statement::Goto("label1".into())),
+                    BlockItem::S(Statement::Labeled {
+                        label: "label0".into(),
+                        statement: Box::new(Statement::Null),
+                    }),
+                    BlockItem::S(Statement::Return(Expression::Constant(0))),
+                ],
+            },
+        };
+
+        assert!(analyse(&mut program).is_err());
+    }
+
+    #[test]
+    fn test_goto_duplicate_label() {
+        // check for duplicate label
+        let mut program = Program {
+            function: Function {
+                name: "main".into(),
+                body: vec![
+                    BlockItem::S(Statement::Goto("label1".into())),
+                    BlockItem::S(Statement::Labeled {
+                        label: "label1".into(),
+                        statement: Box::new(Statement::Null),
+                    }),
+                    BlockItem::S(Statement::Labeled {
+                        label: "label1".into(),
+                        statement: Box::new(Statement::Null),
+                    }),
+                    BlockItem::S(Statement::Return(Expression::Constant(0))),
+                ],
+            },
+        };
+
+        assert!(analyse(&mut program).is_err());
+    }
+
+    #[test]
+    fn test_goto_duplicate_nested_label() {
+        // check for duplicate label
+        let mut program = Program {
+            function: Function {
+                name: "main".into(),
+                body: vec![
+                    BlockItem::S(Statement::Goto("label1".into())),
+                    BlockItem::S(Statement::Labeled {
+                        label: "label1".into(),
+                        statement: Box::new(Statement::Labeled {
+                            label: "label1".into(),
+                            statement: Box::new(Statement::Null),
+                        }),
+                    }),
+                    BlockItem::S(Statement::Return(Expression::Constant(0))),
+                ],
+            },
+        };
+
+        assert!(analyse(&mut program).is_err());
     }
 }

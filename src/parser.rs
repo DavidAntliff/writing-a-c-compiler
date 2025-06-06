@@ -5,10 +5,12 @@
 //!   <function> ::= "int" <identifier> "(" "void" ")" "{" { <block-item> } "}"
 //!   <block-item> ::= <statement> | <declaration>
 //!   <declaration> ::= "int" <identifier> [ "=" <exp> ] ";"
-//!   <statement> ::= "return" <exp> ";"
-//!                 | <exp> ";"
-//!                 | "if" "(" <exp> ")" <statement> [ "else" <statement> ]
-//!                 | ";"
+//!   <statement> ::= [ <identifier> ":" ] <statement>
+//!                     | "return" <exp> ";"
+//!                     | <exp> ";"
+//!                     | "if" "(" <exp> ")" <statement> [ "else" <statement> ]
+//!                     | "goto" <identifier> ";"
+//!                     | ";"
 //!   <exp> := <factor>
 //!          | <exp> <binop> <exp>
 //!          | <exp> "?" <exp> ":" <exp>
@@ -27,7 +29,7 @@ use crate::ast_c::{
 };
 use crate::lexer::{Keyword, Token, TokenKind};
 use thiserror::Error;
-use winnow::combinator::{fail, peek, repeat_till, terminated, trace};
+use winnow::combinator::{alt, fail, peek, repeat_till, terminated, trace};
 use winnow::dispatch;
 use winnow::error::{StrContext, StrContextValue};
 use winnow::prelude::*;
@@ -274,10 +276,45 @@ fn declaration(i: &mut Tokens<'_>) -> winnow::Result<Declaration> {
 }
 
 fn statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+    alt((labeled_statement, statement2)).parse_next(i)
+}
+
+fn labeled_statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+    let label = identifier
+        .context(StrContext::Label("labeled statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "identifier",
+        )))
+        .parse_next(i)?;
+
+    literal(TokenKind::Colon)
+        .context(StrContext::Label("labeled statement"))
+        .context(StrContext::Expected(StrContextValue::Description(":")))
+        .parse_next(i)?;
+
+    let stmt = statement
+        .context(StrContext::Label("labeled statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "statement",
+        )))
+        .parse_next(i)?;
+
+    Ok(Statement::Labeled {
+        label,
+        statement: Box::new(stmt),
+    })
+}
+
+fn statement2(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     dispatch! { peek(any);
-        &Token { kind: TokenKind::Keyword(Keyword::Return), .. } => statement_return,
+        &Token { kind: TokenKind::Keyword(Keyword::Return), .. } => {
+            statement_return
+        },
         &Token { kind: TokenKind::Keyword(Keyword::If), .. } => {
             statement_if
+        },
+        &Token { kind: TokenKind::Keyword(Keyword::Goto), .. } => {
+            statement_goto
         },
         &Token { kind: TokenKind::Semicolon, .. } => any.value(Statement::Null),
         _ => terminated(exp.map(Statement::Expression), literal(TokenKind::Semicolon)),
@@ -370,8 +407,30 @@ fn statement_if(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     Ok(Statement::If {
         condition: exp,
         then: Box::new(then_stmt),
-        else_: maybe_else_stmt.and_then(|e| Some(Box::new(e))),
+        else_: maybe_else_stmt.map(Box::new),
     })
+}
+
+fn statement_goto(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+    literal(TokenKind::Keyword(Keyword::Goto))
+        .context(StrContext::Label("goto statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "keyword",
+        )))
+        .parse_next(i)?;
+    let label = identifier
+        .context(StrContext::Label("goto statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "identifier",
+        )))
+        .parse_next(i)?;
+    literal(TokenKind::Semicolon)
+        .context(StrContext::Label("goto statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "semicolon",
+        )))
+        .parse_next(i)?;
+    Ok(Statement::Goto(label))
 }
 
 /// Parses an expression with operator precedence, using Precedence Climbing.
@@ -633,8 +692,6 @@ mod tests {
     #[test]
     fn test_expression_precedence_1() {
         // Figure 3-1
-        crate::tests::init_logger();
-
         let input = r#"1 + (2 * 3)"#;
         let tokens = lex(input).unwrap();
         let tokens = Tokens::new(&tokens);
@@ -656,8 +713,6 @@ mod tests {
     #[test]
     fn test_expression_precedence_2() {
         // Figure 3-2
-        crate::tests::init_logger();
-
         let input = r#"(1 + 2) * 3"#;
         let tokens = lex(input).unwrap();
         let tokens = Tokens::new(&tokens);
@@ -678,8 +733,6 @@ mod tests {
     #[test]
     fn test_expression_precedence_3() {
         // Page 55: 1 * 2 - 3 * (4 + 5)
-        crate::tests::init_logger();
-
         let input = r#"1 * 2 - 3 * (4 + 5)"#;
         let tokens = lex(input).unwrap();
         let tokens = Tokens::new(&tokens);
@@ -711,8 +764,6 @@ mod tests {
         // 80 >> 2 | 1 ^ 5 & 7 << 1
         // Equivalent to:
         // (80 >> 2) | (1 ^ (5 & (7 << 1)))
-        crate::tests::init_logger();
-
         let input = r#"80 >> 2 | 1 ^ 5 & 7 << 1"#;
         let tokens = lex(input).unwrap();
         let tokens = Tokens::new(&tokens);
@@ -748,8 +799,6 @@ mod tests {
         // !(80 && 2 == 1 || 5 <= 7 && 2 > 1)
         // Equivalent to:
         // !((80 && (2 == 1)) || ((5 <= 7) && (2 > 1)))
-        crate::tests::init_logger();
-
         let input = r#"!(80 && 2 == 1 || 5 <= 7 && 2 > 1)"#;
         let tokens = lex(input).unwrap();
         let tokens = Tokens::new(&tokens);
@@ -790,8 +839,6 @@ mod tests {
     #[test]
     fn test_declarations_and_assignments() {
         // Listing 5-3
-        crate::tests::init_logger();
-
         let input = r#"
         int main(void) {
             int a;
@@ -870,10 +917,7 @@ mod tests {
         let input = r#"a = 1 ? 2 : 3"#;
         let tokens = lex(input).unwrap();
         let tokens = Tokens::new(&tokens);
-        //let ast = exp.parse(tokens).expect("should parse");
-        let res = exp.parse(tokens);
-        dbg!(&res);
-        let ast = res.expect("should parse");
+        let ast = exp.parse(tokens).expect("should parse");
 
         assert_eq!(
             ast,
@@ -1000,5 +1044,108 @@ mod tests {
                 )),
             )
         )
+    }
+
+    #[test]
+    fn test_goto() {
+        let input = r#"
+        int main(void) {
+            goto label1;
+            label0: ;
+            label1: return 0;
+        }
+        "#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let ast = function.parse(tokens).expect("should parse");
+
+        assert_eq!(
+            ast,
+            Function {
+                name: "main".into(),
+                body: vec![
+                    BlockItem::S(Statement::Goto("label1".into())),
+                    BlockItem::S(Statement::Labeled {
+                        label: "label0".into(),
+                        statement: Box::new(Statement::Null)
+                    }),
+                    BlockItem::S(Statement::Labeled {
+                        label: "label1".into(),
+                        statement: Box::new(Statement::Return(Expression::Constant(0)))
+                    })
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_goto_nested_label() {
+        // book-tests/tests/chapter_6/valid/extra_credit/goto_nested_label.c
+        let input = r#"
+        int main(void) {
+            goto labelB;
+            labelA:
+                labelB:
+                    return 5;
+            return 0;
+        }
+        "#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let ast = function.parse(tokens).expect("should parse");
+
+        assert_eq!(
+            ast,
+            Function {
+                name: "main".into(),
+                body: vec![
+                    BlockItem::S(Statement::Goto("labelB".into())),
+                    BlockItem::S(Statement::Labeled {
+                        label: "labelA".into(),
+                        statement: Box::new(Statement::Labeled {
+                            label: "labelB".into(),
+                            statement: Box::new(Statement::Return(Expression::Constant(5)))
+                        })
+                    }),
+                    BlockItem::S(Statement::Return(Expression::Constant(0))),
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_goto_backwards() {
+        // book-tests/tests/chapter_6/valid/extra_credit/goto_backwards.c
+        let input = r#"
+        int main(void) {
+            if (0)
+            label:
+                return 5;
+            goto label;
+            return 0;
+        }
+        "#;
+        let tokens = lex(input).unwrap();
+        let tokens = Tokens::new(&tokens);
+        let ast = function.parse(tokens).expect("should parse");
+
+        assert_eq!(
+            ast,
+            Function {
+                name: "main".into(),
+                body: vec![
+                    BlockItem::S(Statement::If {
+                        condition: Expression::Constant(0),
+                        then: Box::new(Statement::Labeled {
+                            label: "label".into(),
+                            statement: Box::new(Statement::Return(Expression::Constant(5)))
+                        }),
+                        else_: None,
+                    }),
+                    BlockItem::S(Statement::Goto("label".into())),
+                    BlockItem::S(Statement::Return(Expression::Constant(0))),
+                ]
+            }
+        );
     }
 }

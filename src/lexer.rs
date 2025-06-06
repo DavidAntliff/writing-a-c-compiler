@@ -145,6 +145,7 @@ pub(crate) enum Keyword {
     Return,
     If,
     Else,
+    Goto,
 }
 
 pub(crate) fn lex(input: &str) -> Result<Vec<Token>, LexerError> {
@@ -298,6 +299,10 @@ fn identifier(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
         }),
         "else" => Ok(Token {
             kind: TokenKind::Keyword(Keyword::Else),
+            span,
+        }),
+        "goto" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Goto),
             span,
         }),
         _ => Ok(Token {

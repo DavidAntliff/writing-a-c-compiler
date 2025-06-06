@@ -332,6 +332,16 @@ fn emit_statement(
             then,
             else_,
         } => emit_statement_if(condition, then, else_, instructions, id_gen),
+        ast_c::Statement::Labeled { label, statement } => {
+            instructions.push(Instruction::Label(label.clone().into()));
+            emit_statement(statement, instructions, id_gen)
+        }
+        ast_c::Statement::Goto(label) => {
+            instructions.push(Instruction::Jump {
+                target: label.clone().into(),
+            });
+            None
+        }
         ast_c::Statement::Null => None,
     }
 }
@@ -1410,6 +1420,72 @@ mod tests {
                 // Label(end)
                 Instruction::Label("cond_end.1".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn test_goto() {
+        // int main(void) {
+        //     goto label1;
+        //     label0: return 0;
+        //     label1: return 1;
+        //     label2: return 2;
+        // }
+        let program = ast_c::Program {
+            function: ast_c::Function {
+                name: "main".into(),
+                body: vec![
+                    ast_c::BlockItem::S(ast_c::Statement::Goto("label1".into())),
+                    ast_c::BlockItem::S(ast_c::Statement::Labeled {
+                        label: "label0".into(),
+                        statement: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
+                            0,
+                        ))),
+                    }),
+                    ast_c::BlockItem::S(ast_c::Statement::Labeled {
+                        label: "label1".into(),
+                        statement: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
+                            1,
+                        ))),
+                    }),
+                    ast_c::BlockItem::S(ast_c::Statement::Labeled {
+                        label: "label2".into(),
+                        statement: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
+                            2,
+                        ))),
+                    }),
+                ],
+            },
+        };
+
+        // Listing 5-14: Expected TACKY:
+        //   Jump(label1)
+        //   .label0
+        //     Return(0)
+        //   .label1
+        //     Return(1)
+        //   .label2
+        //     Return(2)
+        assert_eq!(
+            parse(&program).unwrap(),
+            Program {
+                function_definition: FunctionDefinition {
+                    name: "main".into(),
+                    body: vec![
+                        Instruction::Jump {
+                            target: "label1".into(),
+                        },
+                        Instruction::Label("label0".into()),
+                        Instruction::Return(Val::Constant(0)),
+                        Instruction::Label("label1".into()),
+                        Instruction::Return(Val::Constant(1)),
+                        Instruction::Label("label2".into()),
+                        Instruction::Return(Val::Constant(2)),
+                        // Default Return(0)
+                        Instruction::Return(Val::Constant(0)),
+                    ],
+                }
+            }
         );
     }
 }
