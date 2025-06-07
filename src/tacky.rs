@@ -19,6 +19,7 @@
 //!
 
 use crate::ast_c;
+use crate::ast_c::Block;
 use crate::id_gen::IdGenerator;
 use thiserror::Error;
 
@@ -119,39 +120,34 @@ pub struct TackyError {
     pub message: String,
 }
 
-pub(crate) fn parse(program: &ast_c::Program) -> Result<Program, TackyError> {
-    let name: Identifier = (&program.function.name).into();
-
-    let mut body = vec![];
-    let mut id_gen = IdGenerator::new();
-
-    for block_item in &program.function.body.items {
-        match block_item {
-            ast_c::BlockItem::S(statement) => {
-                let val = emit_statement(statement, &mut body, &mut id_gen);
-                if let Some(instruction) = val {
-                    body.push(instruction);
-                }
-            }
-            ast_c::BlockItem::D(ast_c::Declaration { name, init }) => {
-                if let Some(init) = init {
-                    let result = emit_tacky(init, &mut body, &mut id_gen);
-                    body.push(Instruction::Copy {
-                        src: result,
-                        dst: Val::Var(name.clone().into()),
-                    });
-                }
-            }
-        }
-    }
-
-    // Add a Return(0) to the end of all functions (see page 112)
-    body.push(Instruction::Return(Val::Constant(0)));
-
-    let function_definition = FunctionDefinition { name, body };
+pub(crate) fn emit_program(program: &ast_c::Program) -> Result<Program, TackyError> {
+    let function_definition = emit_function(&program.function)?;
 
     Ok(Program {
         function_definition,
+    })
+}
+
+fn emit_function(
+    function: &ast_c::Function,
+    // instructions: &mut Vec<Instruction>,
+    // id_gen: &mut IdGenerator,
+) -> Result<FunctionDefinition, TackyError> {
+    let name: Identifier = (&function.name).into();
+
+    let mut instructions = vec![];
+    let mut id_gen = IdGenerator::new();
+
+    // Expect None
+    let val = emit_block(&function.body, &mut instructions, &mut id_gen);
+    assert!(val.is_none(), "emit_block should return None");
+
+    // Add a Return(0) to the end of all functions (see page 112)
+    instructions.push(Instruction::Return(Val::Constant(0)));
+
+    Ok(FunctionDefinition {
+        name,
+        body: instructions,
     })
 }
 
@@ -159,7 +155,8 @@ fn next_var(id_gen: &mut IdGenerator) -> Identifier {
     format!("tmp.{}", id_gen.next()).into()
 }
 
-fn emit_tacky(
+// Previously called "emit_tacky"
+fn emit_expression(
     exp: &ast_c::Expression,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
@@ -170,7 +167,7 @@ fn emit_tacky(
         ast_c::Expression::Var(identifier) => Val::Var(identifier.into()),
 
         ast_c::Expression::Unary(op, inner) => {
-            let src = emit_tacky(inner, instructions, id_gen);
+            let src = emit_expression(inner, instructions, id_gen);
             let dst = Val::Var(next_var(id_gen));
             let tacky_op = convert_unop(op);
             instructions.push(Instruction::Unary {
@@ -187,12 +184,12 @@ fn emit_tacky(
             let label_false: Identifier = format!("and_false.{id}").into();
             let label_end: Identifier = format!("and_end.{id}").into();
 
-            let v1 = emit_tacky(e1, instructions, id_gen);
+            let v1 = emit_expression(e1, instructions, id_gen);
             instructions.push(Instruction::JumpIfZero {
                 condition: v1.clone(),
                 target: label_false.clone(),
             });
-            let v2 = emit_tacky(e2, instructions, id_gen);
+            let v2 = emit_expression(e2, instructions, id_gen);
             instructions.push(Instruction::JumpIfZero {
                 condition: v2.clone(),
                 target: label_false.clone(),
@@ -219,12 +216,12 @@ fn emit_tacky(
             let label_true: Identifier = format!("or_true.{id}").into();
             let label_end: Identifier = format!("or_end.{id}").into();
 
-            let v1 = emit_tacky(e1, instructions, id_gen);
+            let v1 = emit_expression(e1, instructions, id_gen);
             instructions.push(Instruction::JumpIfNotZero {
                 condition: v1.clone(),
                 target: label_true.clone(),
             });
-            let v2 = emit_tacky(e2, instructions, id_gen);
+            let v2 = emit_expression(e2, instructions, id_gen);
             instructions.push(Instruction::JumpIfNotZero {
                 condition: v2.clone(),
                 target: label_true.clone(),
@@ -248,8 +245,8 @@ fn emit_tacky(
 
         ast_c::Expression::Binary(op, e1, e2) => {
             // Unsequenced - indeterminate order of evaluation
-            let src1 = emit_tacky(e1, instructions, id_gen);
-            let src2 = emit_tacky(e2, instructions, id_gen);
+            let src1 = emit_expression(e1, instructions, id_gen);
+            let src2 = emit_expression(e2, instructions, id_gen);
             let dst = Val::Var(next_var(id_gen));
             let tacky = convert_binop(op);
             instructions.push(Instruction::Binary {
@@ -263,7 +260,7 @@ fn emit_tacky(
 
         ast_c::Expression::Assignment(lhs, rhs) => {
             if let ast_c::Expression::Var(v) = &**lhs {
-                let result = emit_tacky(rhs, instructions, id_gen);
+                let result = emit_expression(rhs, instructions, id_gen);
                 instructions.push(Instruction::Copy {
                     src: result,
                     dst: Val::Var(v.into()),
@@ -312,6 +309,32 @@ fn convert_binop(op: &ast_c::BinaryOperator) -> BinaryOperator {
     }
 }
 
+fn emit_block(
+    block: &Block,
+    instructions: &mut Vec<Instruction>,
+    id_gen: &mut IdGenerator,
+) -> Option<Instruction> {
+    for item in &block.items {
+        match item {
+            ast_c::BlockItem::S(statement) => {
+                if let Some(instruction) = emit_statement(&statement, instructions, id_gen) {
+                    instructions.push(instruction);
+                }
+            }
+            ast_c::BlockItem::D(ast_c::Declaration { name, init }) => {
+                if let Some(init) = init {
+                    let result = emit_expression(init, instructions, id_gen);
+                    instructions.push(Instruction::Copy {
+                        src: result,
+                        dst: Val::Var(name.clone().into()),
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
 fn emit_statement(
     statement: &ast_c::Statement,
     instructions: &mut Vec<Instruction>,
@@ -319,11 +342,11 @@ fn emit_statement(
 ) -> Option<Instruction> {
     match statement {
         ast_c::Statement::Return(exp) => {
-            let val = emit_tacky(exp, instructions, id_gen);
+            let val = emit_expression(exp, instructions, id_gen);
             Some(Instruction::Return(val))
         }
         ast_c::Statement::Expression(exp) => {
-            let _ = emit_tacky(exp, instructions, id_gen);
+            let _ = emit_expression(exp, instructions, id_gen);
             // No need to return anything for an expression statement
             None
         }
@@ -342,9 +365,7 @@ fn emit_statement(
             });
             None
         }
-        ast_c::Statement::Compound(_) => {
-            todo!()
-        }
+        ast_c::Statement::Compound(block) => emit_block(block, instructions, id_gen),
         ast_c::Statement::Null => None,
     }
 }
@@ -377,7 +398,7 @@ fn emit_statement_if(
     let label_end: Identifier = format!("if_end.{}", id_gen.next()).into();
 
     // if:
-    let cond_val = emit_tacky(condition, instructions, id_gen);
+    let cond_val = emit_expression(condition, instructions, id_gen);
 
     instructions.push(Instruction::JumpIfZero {
         condition: cond_val.clone(),
@@ -443,7 +464,7 @@ fn emit_exp_conditional(
 
     // <instructions for condition>
     // c = <result of condition>
-    let c_val = emit_tacky(condition, instructions, id_gen);
+    let c_val = emit_expression(condition, instructions, id_gen);
     instructions.push(Instruction::Copy {
         src: c_val,
         dst: c.clone(),
@@ -456,7 +477,7 @@ fn emit_exp_conditional(
     });
 
     // e1:
-    let val_e1 = emit_tacky(e1, instructions, id_gen);
+    let val_e1 = emit_expression(e1, instructions, id_gen);
 
     // v1 = <result of e1>
     instructions.push(Instruction::Copy {
@@ -479,7 +500,7 @@ fn emit_exp_conditional(
     instructions.push(Instruction::Label(label_e2));
 
     // <instructions to calculate e2>
-    let val_e2 = emit_tacky(e2, instructions, id_gen);
+    let val_e2 = emit_expression(e2, instructions, id_gen);
 
     // v2 = <result of e2>
     instructions.push(Instruction::Copy {
@@ -511,7 +532,7 @@ mod tests {
         let mut id_gen = IdGenerator::new();
 
         assert_eq!(
-            emit_tacky(&exp, &mut instructions, &mut id_gen),
+            emit_expression(&exp, &mut instructions, &mut id_gen),
             Val::Constant(2)
         );
         assert!(instructions.is_empty());
@@ -527,7 +548,7 @@ mod tests {
         let mut id_gen = IdGenerator::new();
 
         assert_eq!(
-            emit_tacky(&exp, &mut instructions, &mut id_gen),
+            emit_expression(&exp, &mut instructions, &mut id_gen),
             Val::Var("tmp.0".into())
         );
         assert_eq!(
@@ -556,7 +577,7 @@ mod tests {
         let mut id_gen = IdGenerator::new();
 
         assert_eq!(
-            emit_tacky(&exp, &mut instructions, &mut id_gen),
+            emit_expression(&exp, &mut instructions, &mut id_gen),
             Val::Var("tmp.2".into())
         );
         assert_eq!(
@@ -657,7 +678,7 @@ mod tests {
         };
 
         assert_eq!(
-            parse(&program).unwrap(),
+            emit_program(&program).unwrap(),
             Program {
                 function_definition: FunctionDefinition {
                     name: "main".into(),
@@ -717,7 +738,7 @@ mod tests {
         };
 
         assert_eq!(
-            parse(&program).unwrap(),
+            emit_program(&program).unwrap(),
             Program {
                 function_definition: FunctionDefinition {
                     name: "main".into(),
@@ -758,7 +779,7 @@ mod tests {
     fn do_emit_tacky(exp: &ast_c::Expression) -> (Val, Vec<Instruction>) {
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
-        let val = emit_tacky(exp, &mut instructions, &mut id_gen);
+        let val = emit_expression(exp, &mut instructions, &mut id_gen);
         (val, instructions)
     }
 
@@ -1219,7 +1240,7 @@ mod tests {
         //   b.0 = tmp.3
         //   Return(b.0)
         assert_eq!(
-            parse(&program).unwrap(),
+            emit_program(&program).unwrap(),
             Program {
                 function_definition: FunctionDefinition {
                     name: "main".into(),
@@ -1479,7 +1500,7 @@ mod tests {
         //   .label2
         //     Return(2)
         assert_eq!(
-            parse(&program).unwrap(),
+            emit_program(&program).unwrap(),
             Program {
                 function_definition: FunctionDefinition {
                     name: "main".into(),

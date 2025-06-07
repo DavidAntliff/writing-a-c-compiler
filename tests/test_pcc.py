@@ -17,6 +17,7 @@ class CProgram:
 
 # compile with gcc and compare outputs
 VALID_C_PROGRAMS = {
+    "compound_statements": CProgram(Path("tests/c/valid/compound_statements.c"), 3),
     "conditional": CProgram(Path("tests/c/valid/conditional.c"),),# 3),
     "if_else": CProgram(Path("tests/c/valid/if_else.c"),),# 3),
     "goto": CProgram(Path("tests/c/valid/goto.c"), 9),

@@ -219,15 +219,10 @@ fn label_resolution(function: &Function) -> Result<(), Error> {
 
     // AST is a tree, so we need to traverse it recursively,
     // building up the labels as we go, then check for duplicates afterwards.
-    for (label_count, item) in function.body.items.iter().enumerate() {
+    for item in function.body.items.iter() {
         if let BlockItem::S(statement) = item {
-            let nested_labels = nested_labels(&statement);
-            for label in nested_labels {
-                if labels.contains_key(&label) {
-                    return Err(Error::DuplicateLabel(label.clone()));
-                }
-                labels.insert(label.clone(), label_count);
-            }
+            let nested_labels = nested_labels(&statement)?;
+            extend_labels(&mut labels, &nested_labels)?;
         }
     }
 
@@ -243,31 +238,54 @@ fn label_resolution(function: &Function) -> Result<(), Error> {
     Ok(())
 }
 
-fn nested_labels(statement: &Statement) -> Vec<String> {
+fn extend_labels(
+    labels: &mut HashMap<String, usize>,
+    new_labels: &HashMap<String, usize>,
+) -> Result<(), Error> {
+    for (label, _) in new_labels {
+        if labels.contains_key(label) {
+            return Err(Error::DuplicateLabel(label.clone()));
+        }
+        labels.insert(label.clone(), 0); // value is not used, just to ensure uniqueness
+    }
+    Ok(())
+}
+
+fn nested_labels(statement: &Statement) -> Result<HashMap<String, usize>, Error> {
+    let mut labels = HashMap::new();
     match statement {
         Statement::Labeled { label, statement } => {
-            let mut labels = vec![label.clone()];
-            labels.extend(nested_labels(statement));
-            labels
+            labels.insert(label.clone(), 0);
+            let nested_labels = nested_labels(statement)?;
+            extend_labels(&mut labels, &nested_labels)?;
         }
         Statement::If { then, else_, .. } => {
-            let mut labels = nested_labels(then);
+            let nested_labels_ = nested_labels(then)?;
+            extend_labels(&mut labels, &nested_labels_)?;
             if let Some(else_stmt) = else_ {
-                labels.extend(nested_labels(else_stmt));
+                let nested_labels_ = nested_labels(else_stmt)?;
+                extend_labels(&mut labels, &nested_labels_)?;
             }
-            labels
         }
-        Statement::Compound(_) => {
+        Statement::Compound(block) => {
             // must be unique within a function, not a scope
-            vec![]
+            for item in &block.items {
+                match item {
+                    BlockItem::D(_) => continue, // declarations do not have labels
+                    BlockItem::S(statement) => {
+                        let nested = nested_labels(statement)?;
+                        extend_labels(&mut labels, &nested)?;
+                    }
+                }
+            }
         }
         Statement::Return(_) // explicit listing of all variants
         | Statement::Expression(_)
         | Statement::Goto(_)
         | Statement::Null => {
-            vec![]
         }
     }
+    Ok(labels)
 }
 
 #[cfg(test)]

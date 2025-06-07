@@ -93,7 +93,7 @@ pub fn do_the_thing(
         return Ok(());
     }
 
-    let tacky = tacky::parse(&ast)?;
+    let tacky = tacky::emit_program(&ast)?;
 
     log::debug!("TACKY: {tacky:#?}");
 
@@ -132,7 +132,7 @@ fn lex_parse_analyse_and_codegen(input: &str) -> Result<ast_asm::Program, Error>
     let lexed = lexer::lex(input)?;
     let mut ast = parser::parse(&lexed)?;
     semantics::analyse(&mut ast)?;
-    let tacky = tacky::parse(&ast)?;
+    let tacky = tacky::emit_program(&ast)?;
     let asm = codegen::parse(&tacky)?;
     Ok(asm)
 }
