@@ -146,6 +146,11 @@ pub(crate) enum Keyword {
     If,
     Else,
     Goto,
+    Do,
+    While,
+    For,
+    Break,
+    Continue,
 }
 
 pub(crate) fn lex(input: &str) -> Result<Vec<Token>, LexerError> {
@@ -303,6 +308,26 @@ fn identifier(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
         }),
         "goto" => Ok(Token {
             kind: TokenKind::Keyword(Keyword::Goto),
+            span,
+        }),
+        "do" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Do),
+            span,
+        }),
+        "while" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::While),
+            span,
+        }),
+        "for" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::For),
+            span,
+        }),
+        "break" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Break),
+            span,
+        }),
+        "continue" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Continue),
             span,
         }),
         _ => Ok(Token {
