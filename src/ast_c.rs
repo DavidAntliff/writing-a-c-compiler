@@ -6,12 +6,18 @@
 //!   block_item = S(statement) | D(declaration)
 //!   block = Block(block_item*)
 //!   declaration = Declaration(identifier name, exp? init)
-//!   statement = Return(exp)
+//!   for_init = InitDecl(declaration) | InitExp(exp?)
+//!   statement = Labeled(identifier label, statement)
+//!             | Return(exp)
 //!             | Expression(exp)
 //!             | If(exp condition, statement then, statement? else)
-//!             | Labeled(identifier label, statement)
 //!             | Goto(identifier label)
 //!             | Compound(block)
+//!             | Break(identifier? loop_label)
+//!             | Continue(identifier? loop_label)
+//!             | While(exp condition, statement body, identifier? loop_label)
+//!             | DoWhile(statement body, exp condition, identifier? loop_label)
+//!             | For(for_init init, exp? condition, exp? post, statement body, identifier? loop_label)
 //!             | Null
 //!   exp = Constant(int)
 //!       | Var(identifier)
@@ -70,7 +76,32 @@ pub(crate) enum Statement {
     },
     Goto(Identifier),
     Compound(Block),
+    Break(Option<Identifier>),
+    Continue(Option<Identifier>),
+    While {
+        condition: Expression,
+        body: Box<Statement>,
+        loop_label: Option<Identifier>,
+    },
+    DoWhile {
+        body: Box<Statement>,
+        condition: Expression,
+        loop_label: Option<Identifier>,
+    },
+    For {
+        init: ForInit,
+        condition: Option<Expression>,
+        post: Option<Expression>,
+        body: Box<Statement>,
+        loop_label: Option<Identifier>,
+    },
     Null,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum ForInit {
+    InitDecl(Declaration),
+    InitExp(Option<Expression>),
 }
 
 #[derive(Debug, PartialEq, Clone)]

@@ -366,6 +366,11 @@ fn emit_statement(
             None
         }
         ast_c::Statement::Compound(block) => emit_block(block, instructions, id_gen),
+        ast_c::Statement::Break(..) => todo!(),
+        ast_c::Statement::Continue(..) => todo!(),
+        ast_c::Statement::While { .. } => todo!(),
+        ast_c::Statement::DoWhile { .. } => todo!(),
+        ast_c::Statement::For { .. } => todo!(),
         ast_c::Statement::Null => None,
     }
 }

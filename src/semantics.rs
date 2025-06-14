@@ -153,6 +153,25 @@ fn resolve_statement(
                 id_gen,
             )?))
         }
+        Statement::Break(label) => todo!(),
+        Statement::Continue(label) => todo!(),
+        Statement::While {
+            condition,
+            body,
+            loop_label,
+        } => todo!(),
+        Statement::DoWhile {
+            body,
+            condition,
+            loop_label,
+        } => todo!(),
+        Statement::For {
+            init,
+            condition,
+            post,
+            body,
+            loop_label,
+        } => todo!(),
         Statement::Null => Ok(Statement::Null),
     }
 }
@@ -279,6 +298,11 @@ fn nested_labels(statement: &Statement) -> Result<HashMap<String, usize>, Error>
                 }
             }
         }
+        Statement::Break(_) => todo!(),
+        Statement::Continue(_) => todo!(),
+        Statement::While { .. } => todo!(),
+        Statement::DoWhile { .. } => todo!(),
+        Statement::For { .. } => todo!(),
         Statement::Return(_) // explicit listing of all variants
         | Statement::Expression(_)
         | Statement::Goto(_)

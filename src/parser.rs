@@ -6,12 +6,18 @@
 //!   <block> ::= "{" { <block-item> } "}"
 //!   <block-item> ::= <statement> | <declaration>
 //!   <declaration> ::= "int" <identifier> [ "=" <exp> ] ";"
+//!   <for-init> ::= <declaration> | [ <exp> ] ";"
 //!   <statement> ::= [ <identifier> ":" ] <statement>
 //!                     | "return" <exp> ";"
 //!                     | <exp> ";"
 //!                     | "if" "(" <exp> ")" <statement> [ "else" <statement> ]
 //!                     | "goto" <identifier> ";"
 //!                     | <block>
+//!                     | "break" ";"
+//!                     | "continue" ";"
+//!                     | "while" "(" <exp> ")" <statement>
+//!                     | "do" <statement> "while" "(" <exp> ")" ";"
+//!                     | "for" "(" <for-init> [ <exp> ] ";" [ <exp> ] ")" <statement>
 //!                     | ";"
 //!   <exp> := <factor>
 //!          | <exp> <binop> <exp>
@@ -331,6 +337,15 @@ fn statement2(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
         &Token { kind: TokenKind::OpenBrace, .. } => {
             block.map(Statement::Compound)
         },
+        &Token { kind: TokenKind::Keyword(Keyword::Break), .. } => {
+            statement_break
+        },
+        &Token { kind: TokenKind::Keyword(Keyword::Continue), .. } => {
+            statement_continue
+        },
+        &Token { kind: TokenKind::Keyword(Keyword::While), ..} => {
+            statement_while
+        },
         &Token { kind: TokenKind::Semicolon, .. } => any.value(Statement::Null),
         _ => terminated(exp.map(Statement::Expression), literal(TokenKind::Semicolon)),
     }
@@ -446,6 +461,80 @@ fn statement_goto(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
         )))
         .parse_next(i)?;
     Ok(Statement::Goto(label))
+}
+
+fn statement_break(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+    literal(TokenKind::Keyword(Keyword::Break))
+        .context(StrContext::Label("break statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "keyword",
+        )))
+        .parse_next(i)?;
+
+    literal(TokenKind::Semicolon)
+        .context(StrContext::Label("break statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "semicolon",
+        )))
+        .parse_next(i)?;
+
+    Ok(Statement::Break(None))
+}
+
+fn statement_continue(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+    literal(TokenKind::Keyword(Keyword::Continue))
+        .context(StrContext::Label("continue statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "keyword",
+        )))
+        .parse_next(i)?;
+
+    literal(TokenKind::Semicolon)
+        .context(StrContext::Label("continue statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "semicolon",
+        )))
+        .parse_next(i)?;
+
+    Ok(Statement::Continue(None))
+}
+
+fn statement_while(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+    literal(TokenKind::Keyword(Keyword::While))
+        .context(StrContext::Label("while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "keyword",
+        )))
+        .parse_next(i)?;
+    literal(TokenKind::OpenParen)
+        .context(StrContext::Label("while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "open parenthesis",
+        )))
+        .parse_next(i)?;
+    let condition = exp
+        .context(StrContext::Label("while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "expression",
+        )))
+        .parse_next(i)?;
+    literal(TokenKind::CloseParen)
+        .context(StrContext::Label("while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "close parenthesis",
+        )))
+        .parse_next(i)?;
+    let body = statement
+        .context(StrContext::Label("while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "statement",
+        )))
+        .parse_next(i)?;
+    Ok(Statement::While {
+        condition,
+        body: Box::new(body),
+        loop_label: None,
+    })
 }
 
 /// Parses an expression with operator precedence, using Precedence Climbing.
@@ -1216,6 +1305,129 @@ mod tests {
                         })),
                         BlockItem::S(Statement::Return(Expression::Var("x".into())))
                     ]
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn test_while_statement() {
+        let input = r#"
+        int main(void) {
+            while (1) {
+                if (0)
+                    continue;
+                else
+                    break;
+            }
+        }
+        "#;
+        let ast = parse_function(input);
+
+        assert_eq!(
+            ast,
+            Function {
+                name: "main".into(),
+                body: Block {
+                    items: vec![BlockItem::S(Statement::While {
+                        condition: Expression::Constant(1),
+                        body: Box::new(Statement::Compound(Block {
+                            items: vec![BlockItem::S(Statement::If {
+                                condition: Expression::Constant(0),
+                                then: Box::new(Statement::Continue(None)),
+                                else_: Some(Box::new(Statement::Break(None))),
+                            })]
+                        })),
+                        loop_label: None,
+                    })]
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn test_do_while_statement() {
+        let input = r#"
+        int main(void) {
+            do {
+                if (0)
+                    continue;
+                else
+                    break;
+            } while (1);
+        }
+        "#;
+        let ast = parse_function(input);
+
+        assert_eq!(
+            ast,
+            Function {
+                name: "main".into(),
+                body: Block {
+                    items: vec![BlockItem::S(Statement::DoWhile {
+                        body: Box::new(Statement::Compound(Block {
+                            items: vec![BlockItem::S(Statement::If {
+                                condition: Expression::Constant(0),
+                                then: Box::new(Statement::Continue(None)),
+                                else_: Some(Box::new(Statement::Break(None))),
+                            })]
+                        })),
+                        condition: Expression::Constant(1),
+                        loop_label: None,
+                    })]
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn test_for_statement() {
+        let input = r#"
+        int main(void) {
+            for (int i = 0; i < 10; i = i + 1) {
+                if (i > 5)
+                    break;
+            }
+        }
+        "#;
+        let ast = parse_function(input);
+
+        assert_eq!(
+            ast,
+            Function {
+                name: "main".into(),
+                body: Block {
+                    items: vec![BlockItem::S(Statement::For {
+                        init: ForInit::InitDecl(Declaration {
+                            name: "i".into(),
+                            init: Some(Expression::Constant(0)),
+                        }),
+                        condition: Some(Expression::Binary(
+                            BinaryOperator::LessThan,
+                            Box::new(Expression::Var("i".into())),
+                            Box::new(Expression::Constant(10))
+                        )),
+                        post: Some(Expression::Assignment(
+                            Box::new(Expression::Var("i".into())),
+                            Box::new(Expression::Binary(
+                                BinaryOperator::Add,
+                                Box::new(Expression::Var("i".into())),
+                                Box::new(Expression::Constant(1))
+                            ))
+                        )),
+                        body: Box::new(Statement::Compound(Block {
+                            items: vec![BlockItem::S(Statement::If {
+                                condition: Expression::Binary(
+                                    BinaryOperator::GreaterThan,
+                                    Box::new(Expression::Var("i".into())),
+                                    Box::new(Expression::Constant(5))
+                                ),
+                                then: Box::new(Statement::Break(None)),
+                                else_: None,
+                            })]
+                        })),
+                        loop_label: None,
+                    })]
                 }
             }
         );
