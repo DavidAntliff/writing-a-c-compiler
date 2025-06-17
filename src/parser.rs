@@ -33,12 +33,12 @@
 //!
 
 use crate::ast_c::{
-    BinaryOperator, Block, BlockItem, Declaration, Expression, Function, Program, Statement,
-    UnaryOperator,
+    BinaryOperator, Block, BlockItem, Declaration, Expression, ForInit, Function, Program,
+    Statement, UnaryOperator,
 };
 use crate::lexer::{Keyword, Token, TokenKind};
 use thiserror::Error;
-use winnow::combinator::{alt, fail, peek, repeat_till, terminated, trace};
+use winnow::combinator::{alt, fail, opt, peek, repeat_till, terminated, trace};
 use winnow::dispatch;
 use winnow::error::{StrContext, StrContextValue};
 use winnow::prelude::*;
@@ -131,21 +131,21 @@ impl winnow::stream::ContainsToken<&'_ Token> for TokenKind {
 impl winnow::stream::ContainsToken<&'_ Token> for &'_ [TokenKind] {
     #[inline]
     fn contains_token(&self, token: &'_ Token) -> bool {
-        self.iter().any(|t| *t == token.kind)
+        self.contains(&token.kind)
     }
 }
 
 impl<const LEN: usize> winnow::stream::ContainsToken<&'_ Token> for &'_ [TokenKind; LEN] {
     #[inline]
     fn contains_token(&self, token: &'_ Token) -> bool {
-        self.iter().any(|t| *t == token.kind)
+        self.contains(&token.kind)
     }
 }
 
 impl<const LEN: usize> winnow::stream::ContainsToken<&'_ Token> for [TokenKind; LEN] {
     #[inline]
     fn contains_token(&self, token: &'_ Token) -> bool {
-        self.iter().any(|t| *t == token.kind)
+        self.contains(&token.kind)
     }
 }
 
@@ -346,6 +346,12 @@ fn statement2(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
         &Token { kind: TokenKind::Keyword(Keyword::While), ..} => {
             statement_while
         },
+        &Token { kind: TokenKind::Keyword(Keyword::Do), ..} => {
+            statement_do_while
+        },
+        &Token { kind: TokenKind::Keyword(Keyword::For), ..} => {
+            statement_for
+        },
         &Token { kind: TokenKind::Semicolon, .. } => any.value(Statement::Null),
         _ => terminated(exp.map(Statement::Expression), literal(TokenKind::Semicolon)),
     }
@@ -535,6 +541,134 @@ fn statement_while(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
         body: Box::new(body),
         loop_label: None,
     })
+}
+
+fn statement_do_while(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+    literal(TokenKind::Keyword(Keyword::Do))
+        .context(StrContext::Label("do-while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "keyword",
+        )))
+        .parse_next(i)?;
+    let body = statement
+        .context(StrContext::Label("do-while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "statement",
+        )))
+        .parse_next(i)?;
+    literal(TokenKind::Keyword(Keyword::While))
+        .context(StrContext::Label("do-while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "keyword",
+        )))
+        .parse_next(i)?;
+    literal(TokenKind::OpenParen)
+        .context(StrContext::Label("do-while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "open parenthesis",
+        )))
+        .parse_next(i)?;
+    let condition = exp
+        .context(StrContext::Label("do-while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "expression",
+        )))
+        .parse_next(i)?;
+    literal(TokenKind::CloseParen)
+        .context(StrContext::Label("do-while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "close parenthesis",
+        )))
+        .parse_next(i)?;
+    literal(TokenKind::Semicolon)
+        .context(StrContext::Label("do-while statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "semicolon",
+        )))
+        .parse_next(i)?;
+    Ok(Statement::DoWhile {
+        body: Box::new(body),
+        condition,
+        loop_label: None,
+    })
+}
+
+fn statement_for(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+    literal(TokenKind::Keyword(Keyword::For))
+        .context(StrContext::Label("for statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "keyword",
+        )))
+        .parse_next(i)?;
+
+    literal(TokenKind::OpenParen)
+        .context(StrContext::Label("for statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "open parenthesis",
+        )))
+        .parse_next(i)?;
+
+    let init = for_init.parse_next(i)?;
+
+    // semicolon consumed by for_init
+
+    let condition =
+        opt(exp
+            .context(StrContext::Label("for statement"))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "expression",
+            ))))
+        .parse_next(i)?;
+
+    literal(TokenKind::Semicolon)
+        .context(StrContext::Label("for statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "open parenthesis",
+        )))
+        .parse_next(i)?;
+
+    let post = opt(exp
+        .context(StrContext::Label("for statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "expression",
+        ))))
+    .parse_next(i)?;
+
+    literal(TokenKind::CloseParen)
+        .context(StrContext::Label("for statement"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "open parenthesis",
+        )))
+        .parse_next(i)?;
+
+    let body = Box::new(
+        statement
+            .context(StrContext::Label("for statement"))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "statement",
+            )))
+            .parse_next(i)?,
+    );
+
+    Ok(Statement::For {
+        init,
+        condition,
+        post,
+        body,
+        loop_label: None,
+    })
+}
+
+fn for_init(i: &mut Tokens<'_>) -> winnow::Result<ForInit> {
+    alt((
+        declaration.map(ForInit::InitDecl),
+        terminated(
+            exp.map(Some).map(ForInit::InitExp),
+            literal(TokenKind::Semicolon),
+        ),
+        literal(TokenKind::Semicolon).map(|_| ForInit::InitExp(None)),
+    ))
+    .parse_next(i)
 }
 
 /// Parses an expression with operator precedence, using Precedence Climbing.
@@ -1429,6 +1563,106 @@ mod tests {
                         loop_label: None,
                     })]
                 }
+            }
+        );
+    }
+
+    #[test]
+    fn test_for_statement_no_init() {
+        let input = r#"
+            for (; 0; 1)
+                ;
+        "#;
+        let ast = parse_statement(input);
+
+        assert_eq!(
+            ast,
+            Statement::For {
+                init: ForInit::InitExp(None),
+                condition: Some(Expression::Constant(0)),
+                post: Some(Expression::Constant(1)),
+                body: Box::new(Statement::Null),
+                loop_label: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_for_statement_init_exp() {
+        let input = r#"
+            for (2; 0; 1)
+                ;
+        "#;
+        let ast = parse_statement(input);
+
+        assert_eq!(
+            ast,
+            Statement::For {
+                init: ForInit::InitExp(Some(Expression::Constant(2))),
+                condition: Some(Expression::Constant(0)),
+                post: Some(Expression::Constant(1)),
+                body: Box::new(Statement::Null),
+                loop_label: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_for_statement_no_condition() {
+        let input = r#"
+            for (1; ; 1)
+                ;
+        "#;
+        let ast = parse_statement(input);
+
+        assert_eq!(
+            ast,
+            Statement::For {
+                init: ForInit::InitExp(Some(Expression::Constant(1))),
+                condition: None,
+                post: Some(Expression::Constant(1)),
+                body: Box::new(Statement::Null),
+                loop_label: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_for_statement_no_post() {
+        let input = r#"
+            for (1; 2; )
+                ;
+        "#;
+        let ast = parse_statement(input);
+
+        assert_eq!(
+            ast,
+            Statement::For {
+                init: ForInit::InitExp(Some(Expression::Constant(1))),
+                condition: Some(Expression::Constant(2)),
+                post: None,
+                body: Box::new(Statement::Null),
+                loop_label: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_for_statement_no_nothing() {
+        let input = r#"
+            for (;;)
+                ;
+        "#;
+        let ast = parse_statement(input);
+
+        assert_eq!(
+            ast,
+            Statement::For {
+                init: ForInit::InitExp(None),
+                condition: None,
+                post: None,
+                body: Box::new(Statement::Null),
+                loop_label: None,
             }
         );
     }
