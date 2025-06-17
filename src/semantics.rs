@@ -1,4 +1,6 @@
-use crate::ast_c::{Block, BlockItem, Declaration, Expression, Function, Program, Statement};
+use crate::ast_c::{
+    Block, BlockItem, Declaration, Expression, ForInit, Function, Program, Statement,
+};
 use crate::id_gen::IdGenerator;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -20,6 +22,12 @@ pub enum Error {
     #[error("Duplicate label: {0}")]
     DuplicateLabel(String),
 
+    #[error("Break statement outside of loop")]
+    BreakOutsideLoop,
+
+    #[error("Continue statement outside of loop")]
+    ContinueOutsideLoop,
+
     #[error("{0}")]
     Message(String),
 }
@@ -27,8 +35,10 @@ pub enum Error {
 pub(crate) fn analyse(program: &mut Program) -> Result<(), Error> {
     variable_resolution(program)?;
 
+    loop_labeling(program)?;
+
     // TODO: for each function...
-    label_resolution(&program.function)?;
+    goto_label_resolution(&program.function)?;
 
     Ok(())
 }
@@ -153,25 +163,46 @@ fn resolve_statement(
                 id_gen,
             )?))
         }
-        Statement::Break(label) => todo!(),
-        Statement::Continue(label) => todo!(),
+        Statement::Break(_) => Ok(statement.clone()),
+        Statement::Continue(_) => Ok(statement.clone()),
         Statement::While {
             condition,
             body,
             loop_label,
-        } => todo!(),
+        } => Ok(Statement::While {
+            condition: resolve_exp(condition, variable_map)?,
+            body: Box::new(resolve_statement(body, variable_map, id_gen)?),
+            loop_label: loop_label.clone(),
+        }),
         Statement::DoWhile {
             body,
             condition,
             loop_label,
-        } => todo!(),
+        } => Ok(Statement::DoWhile {
+            body: Box::new(resolve_statement(body, variable_map, id_gen)?),
+            condition: resolve_exp(condition, variable_map)?,
+            loop_label: loop_label.clone(),
+        }),
         Statement::For {
             init,
             condition,
             post,
             body,
             loop_label,
-        } => todo!(),
+        } => {
+            let mut new_variable_map = copy_variable_map(variable_map);
+            let init = resolve_for_init(init, &mut new_variable_map, id_gen)?;
+            let condition = resolve_optional_exp(condition, &mut new_variable_map)?;
+            let post = resolve_optional_exp(post, &mut new_variable_map)?;
+            let body = resolve_statement(body, &mut new_variable_map, id_gen)?;
+            Ok(Statement::For {
+                init,
+                condition,
+                post,
+                body: Box::new(body),
+                loop_label: loop_label.clone(),
+            })
+        }
         Statement::Null => Ok(Statement::Null),
     }
 }
@@ -233,15 +264,203 @@ fn resolve_exp(
     }
 }
 
-fn label_resolution(function: &Function) -> Result<(), Error> {
+fn resolve_for_init(
+    init: &ForInit,
+    variable_map: &mut HashMap<String, MapEntry>,
+    id_gen: &mut IdGenerator,
+) -> Result<ForInit, Error> {
+    match init {
+        ForInit::InitDecl(decl) => Ok(ForInit::InitDecl(resolve_declaration(
+            decl,
+            variable_map,
+            id_gen,
+        )?)),
+        ForInit::InitExp(exp) => Ok(ForInit::InitExp(resolve_optional_exp(exp, variable_map)?)),
+    }
+}
+
+fn resolve_optional_exp(
+    exp: &Option<Expression>,
+    variable_map: &mut HashMap<String, MapEntry>,
+) -> Result<Option<Expression>, Error> {
+    if let Some(exp) = exp {
+        Ok(Some(resolve_exp(exp, variable_map)?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn loop_labeling(program: &mut Program) -> Result<(), Error> {
+    let mut variable_map = HashMap::<String, MapEntry>::new();
+    let mut id_gen = IdGenerator::new();
+
+    // TODO: for globals, and for each function:
+    program.function.body =
+        loop_label_block(&program.function.body, &mut variable_map, &mut id_gen)?;
+
+    Ok(())
+}
+
+fn loop_label_block(
+    block: &Block,
+    variable_map: &mut HashMap<String, MapEntry>,
+    id_gen: &mut IdGenerator,
+) -> Result<Block, Error> {
+    let mut items = Vec::new();
+    for item in &block.items {
+        match item {
+            BlockItem::S(statement) => {
+                items.push(BlockItem::S(loop_label_statement(
+                    statement,
+                    None,
+                    variable_map,
+                    id_gen,
+                )?));
+            }
+            BlockItem::D(_) => {
+                items.push(item.clone()); // declarations do not have loops
+            }
+        }
+    }
+    Ok(Block { items })
+}
+
+fn loop_label_statement(
+    statement: &Statement,
+    current_label: Option<String>,
+    variable_map: &mut HashMap<String, MapEntry>,
+    id_gen: &mut IdGenerator,
+) -> Result<Statement, Error> {
+    match statement {
+        Statement::If {
+            condition,
+            then,
+            else_,
+        } => Ok(Statement::If {
+            condition: condition.clone(),
+            then: Box::new(loop_label_statement(
+                then,
+                current_label.clone(),
+                variable_map,
+                id_gen,
+            )?),
+            else_: if let Some(else_stmt) = else_ {
+                Some(Box::new(loop_label_statement(
+                    else_stmt,
+                    current_label.clone(),
+                    variable_map,
+                    id_gen,
+                )?))
+            } else {
+                None
+            },
+        }),
+        Statement::Labeled { label, statement } => Ok(Statement::Labeled {
+            label: label.clone(),
+            statement: Box::new(loop_label_statement(
+                statement,
+                current_label.clone(),
+                variable_map,
+                id_gen,
+            )?),
+        }),
+        Statement::Compound(block) => {
+            let mut items = vec![];
+            for item in &block.items {
+                match item {
+                    BlockItem::S(statement) => {
+                        let labeled_statement = loop_label_statement(
+                            statement,
+                            current_label.clone(),
+                            variable_map,
+                            id_gen,
+                        )?;
+                        items.push(BlockItem::S(labeled_statement));
+                    }
+                    BlockItem::D(_) => {
+                        items.push(item.clone()); // declarations do not have loops
+                    }
+                }
+            }
+            Ok(Statement::Compound(Block { items }))
+        }
+        Statement::Break(_) => {
+            if let Some(label) = &current_label {
+                Ok(Statement::Break(Some(label.clone())))
+            } else {
+                Err(Error::BreakOutsideLoop)
+            }
+        }
+        Statement::Continue(_) => {
+            if let Some(label) = &current_label {
+                Ok(Statement::Continue(Some(label.clone())))
+            } else {
+                Err(Error::ContinueOutsideLoop)
+            }
+        }
+        Statement::While {
+            condition,
+            body,
+            loop_label: _,
+        } => {
+            let loop_label = Some(unique_name("while", id_gen));
+            let labeled_body =
+                loop_label_statement(body, loop_label.clone(), variable_map, id_gen)?;
+            Ok(Statement::While {
+                condition: condition.clone(),
+                body: Box::new(labeled_body),
+                loop_label,
+            })
+        }
+        Statement::DoWhile {
+            body,
+            condition,
+            loop_label: _,
+        } => {
+            let loop_label = Some(unique_name("while", id_gen));
+            let labeled_body =
+                loop_label_statement(body, loop_label.clone(), variable_map, id_gen)?;
+            Ok(Statement::DoWhile {
+                body: Box::new(labeled_body),
+                condition: condition.clone(),
+                loop_label,
+            })
+        }
+        Statement::For {
+            init,
+            condition,
+            post,
+            body,
+            loop_label: _,
+        } => {
+            let loop_label = Some(unique_name("while", id_gen));
+            let labeled_body =
+                loop_label_statement(body, loop_label.clone(), variable_map, id_gen)?;
+            Ok(Statement::For {
+                init: init.clone(),
+                condition: condition.clone(),
+                post: post.clone(),
+                body: labeled_body.into(),
+                loop_label,
+            })
+        }
+        Statement::Return(_) | Statement::Expression(_) | Statement::Goto(_) | Statement::Null => {
+            Ok(statement.clone())
+        }
+    }
+}
+
+// GOTO labels:
+
+fn goto_label_resolution(function: &Function) -> Result<(), Error> {
     let mut labels = HashMap::<String, usize>::new();
 
     // AST is a tree, so we need to traverse it recursively,
     // building up the labels as we go, then check for duplicates afterwards.
     for item in function.body.items.iter() {
         if let BlockItem::S(statement) = item {
-            let nested_labels = nested_labels(&statement)?;
-            extend_labels(&mut labels, &nested_labels)?;
+            let nested_labels = nested_goto_labels(statement)?;
+            extend_goto_labels(&mut labels, &nested_labels)?;
         }
     }
 
@@ -257,11 +476,11 @@ fn label_resolution(function: &Function) -> Result<(), Error> {
     Ok(())
 }
 
-fn extend_labels(
+fn extend_goto_labels(
     labels: &mut HashMap<String, usize>,
     new_labels: &HashMap<String, usize>,
 ) -> Result<(), Error> {
-    for (label, _) in new_labels {
+    for label in new_labels.keys() {
         if labels.contains_key(label) {
             return Err(Error::DuplicateLabel(label.clone()));
         }
@@ -270,20 +489,20 @@ fn extend_labels(
     Ok(())
 }
 
-fn nested_labels(statement: &Statement) -> Result<HashMap<String, usize>, Error> {
+fn nested_goto_labels(statement: &Statement) -> Result<HashMap<String, usize>, Error> {
     let mut labels = HashMap::new();
     match statement {
         Statement::Labeled { label, statement } => {
             labels.insert(label.clone(), 0);
-            let nested_labels = nested_labels(statement)?;
-            extend_labels(&mut labels, &nested_labels)?;
+            let nested_labels = nested_goto_labels(statement)?;
+            extend_goto_labels(&mut labels, &nested_labels)?;
         }
         Statement::If { then, else_, .. } => {
-            let nested_labels_ = nested_labels(then)?;
-            extend_labels(&mut labels, &nested_labels_)?;
+            let nested_labels_ = nested_goto_labels(then)?;
+            extend_goto_labels(&mut labels, &nested_labels_)?;
             if let Some(else_stmt) = else_ {
-                let nested_labels_ = nested_labels(else_stmt)?;
-                extend_labels(&mut labels, &nested_labels_)?;
+                let nested_labels_ = nested_goto_labels(else_stmt)?;
+                extend_goto_labels(&mut labels, &nested_labels_)?;
             }
         }
         Statement::Compound(block) => {
@@ -292,18 +511,27 @@ fn nested_labels(statement: &Statement) -> Result<HashMap<String, usize>, Error>
                 match item {
                     BlockItem::D(_) => continue, // declarations do not have labels
                     BlockItem::S(statement) => {
-                        let nested = nested_labels(statement)?;
-                        extend_labels(&mut labels, &nested)?;
+                        let nested = nested_goto_labels(statement)?;
+                        extend_goto_labels(&mut labels, &nested)?;
                     }
                 }
             }
         }
-        Statement::Break(_) => todo!(),
-        Statement::Continue(_) => todo!(),
-        Statement::While { .. } => todo!(),
-        Statement::DoWhile { .. } => todo!(),
-        Statement::For { .. } => todo!(),
+        Statement::While { body, .. } => {
+            let nested_labels = nested_goto_labels(body)?;
+            extend_goto_labels(&mut labels, &nested_labels)?;
+        },
+        Statement::DoWhile { body, .. } => {
+            let nested_labels = nested_goto_labels(body)?;
+            extend_goto_labels(&mut labels, &nested_labels)?;
+        },
+        Statement::For { body, .. } => {
+            let nested_labels = nested_goto_labels(body)?;
+            extend_goto_labels(&mut labels, &nested_labels)?;
+        },
         Statement::Return(_) // explicit listing of all variants
+        | Statement::Break(_)
+        | Statement::Continue(_)
         | Statement::Expression(_)
         | Statement::Goto(_)
         | Statement::Null => {

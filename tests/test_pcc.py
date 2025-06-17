@@ -121,11 +121,14 @@ def check_error(c_program: InvalidCProgram):
 @pytest.mark.parametrize("c_program_id", VALID_C_PROGRAMS.keys())
 def test_valid_c_program(c_program_id):
     c_program = VALID_C_PROGRAMS[c_program_id]
+    passed = False
     try:
         check_valid_output(c_program)
+        passed = True
     finally:
-        Path(f"gcc.{c_program.path.stem}").unlink()
-        Path(f"pcc.{c_program.path.stem}").unlink()
+        if passed:
+            Path(f"gcc.{c_program.path.stem}").unlink()
+            Path(f"pcc.{c_program.path.stem}").unlink()
 
 
 @pytest.mark.parametrize("c_program_id", INVALID_C_PROGRAMS.keys())

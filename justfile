@@ -6,8 +6,8 @@ check-i386:
     #!/usr/bin/env bash
     set -euo pipefail
     arch="$(uname -p)"
-    if [ "$arch" != "i386" || "$arch" != "x86_64" ]; then
-      echo "Error: Expected i386 architecture, got $arch." >&2;
+    if [[ "$arch" != "i386" && "$arch" != "x86_64" ]]; then
+      echo "Error: Expected x86 architecture, got $arch." >&2;
       exit 1;
     fi
 
@@ -97,5 +97,5 @@ ch8: check-i386
     cargo build
     book-tests/test_compiler ./pcc.py --chapter 8 --stage lex
     book-tests/test_compiler ./pcc.py --chapter 8 --stage parse
-    #book-tests/test_compiler ./pcc.py --chapter 8 --stage validate
+    book-tests/test_compiler ./pcc.py --chapter 8 --stage validate
     #book-tests/test_compiler ./pcc.py --chapter 8 --bitwise --goto
