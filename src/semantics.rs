@@ -417,7 +417,7 @@ fn loop_label_statement(
             condition,
             loop_label: _,
         } => {
-            let loop_label = Some(unique_name("while", id_gen));
+            let loop_label = Some(unique_name("do_while", id_gen));
             let labeled_body =
                 loop_label_statement(body, loop_label.clone(), variable_map, id_gen)?;
             Ok(Statement::DoWhile {
@@ -433,7 +433,7 @@ fn loop_label_statement(
             body,
             loop_label: _,
         } => {
-            let loop_label = Some(unique_name("while", id_gen));
+            let loop_label = Some(unique_name("for", id_gen));
             let labeled_body =
                 loop_label_statement(body, loop_label.clone(), variable_map, id_gen)?;
             Ok(Statement::For {
@@ -543,7 +543,8 @@ fn nested_goto_labels(statement: &Statement) -> Result<HashMap<String, usize>, E
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast_c::{Block, Function};
+    use crate::ast_c::{BinaryOperator, Block, Function};
+    use assert_matches::assert_matches;
 
     #[test]
     fn test_analyse() {
@@ -650,5 +651,236 @@ mod tests {
         };
 
         assert!(analyse(&mut program).is_err());
+    }
+
+    #[test]
+    fn test_loop_labeling() {
+        // Listing 8-22:
+        //
+        // while (a > 0) {                            // loop 1
+        //     for (int i = 0; i < 10; i = i + 1) {   // loop 2
+        //         if (i % 2 == 0)
+        //             continue;                      // -> loop 2
+        //         a = a / 2;
+        //     }
+        //     if (a == b)
+        //         break;                             // -> loop 1
+        // }
+        let mut program = Program {
+            function: Function {
+                name: "main".into(),
+                body: Block {
+                    items: vec![BlockItem::S(Statement::While {
+                        condition: Expression::Binary(
+                            BinaryOperator::GreaterThan,
+                            Box::new(Expression::Var("a".into())),
+                            Box::new(Expression::Constant(0)),
+                        ),
+                        body: Box::new(Statement::Compound(Block {
+                            items: vec![
+                                BlockItem::S(Statement::For {
+                                    init: ForInit::InitDecl(Declaration {
+                                        name: "i".into(),
+                                        init: Some(Expression::Constant(0)),
+                                    }),
+                                    condition: Some(Expression::Binary(
+                                        BinaryOperator::LessThan,
+                                        Box::new(Expression::Var("i".into())),
+                                        Box::new(Expression::Constant(10)),
+                                    )),
+                                    post: Some(Expression::Assignment(
+                                        Box::new(Expression::Var("i".into())),
+                                        Box::new(Expression::Binary(
+                                            BinaryOperator::Add,
+                                            Box::new(Expression::Var("i".into())),
+                                            Box::new(Expression::Constant(1)),
+                                        )),
+                                    )),
+                                    body: Box::new(Statement::Compound(Block {
+                                        items: vec![
+                                            BlockItem::S(Statement::If {
+                                                condition: Expression::Binary(
+                                                    BinaryOperator::Equal,
+                                                    Box::new(Expression::Binary(
+                                                        BinaryOperator::Remainder,
+                                                        Box::new(Expression::Var("i".into())),
+                                                        Box::new(Expression::Constant(2)),
+                                                    )),
+                                                    Box::new(Expression::Constant(0)),
+                                                ),
+                                                then: Box::new(Statement::Continue(None)),
+                                                else_: None,
+                                            }),
+                                            BlockItem::S(Statement::Expression(
+                                                Expression::Assignment(
+                                                    Box::new(Expression::Var("a".into())),
+                                                    Box::new(Expression::Assignment(
+                                                        Box::new(Expression::Var("a".into())),
+                                                        Box::new(Expression::Binary(
+                                                            BinaryOperator::Divide,
+                                                            Box::new(Expression::Var("a".into())),
+                                                            Box::new(Expression::Constant(2)),
+                                                        )),
+                                                    )),
+                                                ),
+                                            )),
+                                        ],
+                                    })),
+                                    loop_label: None,
+                                }),
+                                BlockItem::S(Statement::If {
+                                    condition: Expression::Binary(
+                                        BinaryOperator::Equal,
+                                        Box::new(Expression::Var("a".into())),
+                                        Box::new(Expression::Var("b".into())),
+                                    ),
+                                    then: Box::new(Statement::Break(None)),
+                                    else_: None,
+                                }),
+                            ],
+                        })),
+                        loop_label: None,
+                    })],
+                },
+            },
+        };
+
+        let result = loop_labeling(&mut program);
+        assert!(result.is_ok());
+
+        // assert_eq!(
+        //     program,
+        //     Program {
+        //         function: Function {
+        //             name: "main".into(),
+        //             body: Block {
+        //                 items: vec![BlockItem::S(Statement::While {
+        //                     condition: Expression::Binary(
+        //                         BinaryOperator::GreaterThan,
+        //                         Box::new(Expression::Var("a".into())),
+        //                         Box::new(Expression::Constant(0)),
+        //                     ),
+        //                     body: Box::new(Statement::Compound(Block {
+        //                         items: vec![
+        //                             BlockItem::S(Statement::For {
+        //                                 init: ForInit::InitDecl(Declaration {
+        //                                     name: "i".into(),
+        //                                     init: Some(Expression::Constant(0)),
+        //                                 }),
+        //                                 condition: Some(Expression::Binary(
+        //                                     BinaryOperator::LessThan,
+        //                                     Box::new(Expression::Var("i".into())),
+        //                                     Box::new(Expression::Constant(10)),
+        //                                 )),
+        //                                 post: Some(Expression::Assignment(
+        //                                     Box::new(Expression::Var("i".into())),
+        //                                     Box::new(Expression::Binary(
+        //                                         BinaryOperator::Add,
+        //                                         Box::new(Expression::Var("i".into())),
+        //                                         Box::new(Expression::Constant(1)),
+        //                                     )),
+        //                                 )),
+        //                                 body: Box::new(Statement::Compound(Block {
+        //                                     items: vec![
+        //                                         BlockItem::S(Statement::If {
+        //                                             condition: Expression::Binary(
+        //                                                 BinaryOperator::Equal,
+        //                                                 Box::new(Expression::Binary(
+        //                                                     BinaryOperator::Remainder,
+        //                                                     Box::new(Expression::Var("i".into())),
+        //                                                     Box::new(Expression::Constant(2)),
+        //                                                 )),
+        //                                                 Box::new(Expression::Constant(0)),
+        //                                             ),
+        //                                             then: Box::new(Statement::Continue(Some(
+        //                                                 "for.1".into()
+        //                                             ))),
+        //                                             else_: None,
+        //                                         }),
+        //                                         BlockItem::S(Statement::Expression(
+        //                                             Expression::Assignment(
+        //                                                 Box::new(Expression::Var("a".into())),
+        //                                                 Box::new(Expression::Assignment(
+        //                                                     Box::new(Expression::Var("a".into())),
+        //                                                     Box::new(Expression::Binary(
+        //                                                         BinaryOperator::Divide,
+        //                                                         Box::new(Expression::Var(
+        //                                                             "a".into()
+        //                                                         )),
+        //                                                         Box::new(Expression::Constant(2)),
+        //                                                     )),
+        //                                                 )),
+        //                                             ),
+        //                                         )),
+        //                                     ],
+        //                                 })),
+        //                                 loop_label: Some("for.1".into()),
+        //                             }),
+        //                             BlockItem::S(Statement::If {
+        //                                 condition: Expression::Binary(
+        //                                     BinaryOperator::Equal,
+        //                                     Box::new(Expression::Var("a".into())),
+        //                                     Box::new(Expression::Var("b".into())),
+        //                                 ),
+        //                                 then: Box::new(Statement::Break(Some("while.0".into()))),
+        //                                 else_: None,
+        //                             }),
+        //                         ],
+        //                     })),
+        //                     loop_label: Some("while.0".into()),
+        //                 })],
+        //             },
+        //         },
+        //     }
+        // );
+
+        // Outer loop should be labeled "while.0"
+        assert_matches!(
+                    &program.function.body.items[0],
+                        BlockItem::S(stmt) if matches!(
+                            &stmt, Statement::While { loop_label, .. } if *loop_label == Some("while.0".to_string())
+            )
+        );
+        assert_matches!(
+            &program.function.body.items[0],
+            BlockItem::S(stmt) if matches!(
+                &stmt, Statement::While { body, .. } if matches!(
+                    &**body, Statement::Compound(block) if matches!(
+                        &block.items[1], BlockItem::S(Statement::If { then, .. }) if matches!(
+                            &**then, Statement::Break(loop_label) if
+                                *loop_label == Some("while.0".to_string())
+                            )
+                    )
+                )
+            )
+        );
+
+        // Inner loop should be labeled "for.1"
+        assert_matches!(
+            &program.function.body.items[0],
+            BlockItem::S(stmt) if matches!(
+                &stmt, Statement::While { body, .. } if matches!(
+                    &**body, Statement::Compound(block) if matches!(
+                        &block.items[0], BlockItem::S(Statement::For { loop_label, .. }) if *loop_label == Some("for.1".to_string())
+                    )
+                )
+            )
+        );
+        assert_matches!(
+            &program.function.body.items[0],
+            BlockItem::S(stmt) if matches!(
+                &stmt, Statement::While { body, .. } if matches!(
+                    &**body, Statement::Compound(block) if matches!(
+                        &block.items[0], BlockItem::S(Statement::For { body, .. }) if matches!(
+                            &**body, Statement::Compound(block) if matches!(
+                                &block.items[0], BlockItem::S(Statement::If { then, .. } ) if matches!(
+                                    &**then, Statement::Continue(loop_label) if
+                                *loop_label == Some("for.1".to_string())
+                            ))
+                        )
+                    )
+                )
+            )
+        );
     }
 }

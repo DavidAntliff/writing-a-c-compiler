@@ -95,7 +95,7 @@ ch7: check-i386
 
 ch8: check-i386
     cargo build
-    book-tests/test_compiler ./pcc.py --chapter 8 --stage lex
-    book-tests/test_compiler ./pcc.py --chapter 8 --stage parse
+    #book-tests/test_compiler ./pcc.py --chapter 8 --stage lex
+    #book-tests/test_compiler ./pcc.py --chapter 8 --stage parse
     book-tests/test_compiler ./pcc.py --chapter 8 --stage validate
     #book-tests/test_compiler ./pcc.py --chapter 8 --bitwise --goto
