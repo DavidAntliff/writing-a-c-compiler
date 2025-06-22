@@ -23,7 +23,6 @@ use crate::ast_c::Block;
 use crate::id_gen::IdGenerator;
 use thiserror::Error;
 
-//pub(crate) type Identifier = String;
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
 pub(crate) struct Identifier(pub(crate) String);
 
@@ -317,7 +316,7 @@ fn emit_block(
     for item in &block.items {
         match item {
             ast_c::BlockItem::S(statement) => {
-                if let Some(instruction) = emit_statement(&statement, instructions, id_gen) {
+                if let Some(instruction) = emit_statement(statement, instructions, id_gen) {
                     instructions.push(instruction);
                 }
             }
@@ -360,16 +359,32 @@ fn emit_statement(
             emit_statement(statement, instructions, id_gen)
         }
         ast_c::Statement::Goto(label) => {
-            instructions.push(Instruction::Jump {
-                target: label.clone().into(),
-            });
+            instructions.push(emit_jump(&label.into()));
             None
         }
         ast_c::Statement::Compound(block) => emit_block(block, instructions, id_gen),
-        ast_c::Statement::Break(..) => todo!(),
-        ast_c::Statement::Continue(..) => todo!(),
-        ast_c::Statement::While { .. } => todo!(),
-        ast_c::Statement::DoWhile { .. } => todo!(),
+        ast_c::Statement::Break(Some(label)) => {
+            instructions.push(emit_jump(&break_label(label)));
+            None
+        }
+        ast_c::Statement::Break(None) => panic!("Break without label is not supported in Tacky"),
+        ast_c::Statement::Continue(Some(label)) => {
+            instructions.push(emit_jump(&continue_label(label)));
+            None
+        }
+        ast_c::Statement::Continue(None) => {
+            panic!("Continue without label is not supported in Tacky")
+        }
+        ast_c::Statement::While {
+            condition,
+            body,
+            loop_label,
+        } => emit_while(condition, body, loop_label, instructions, id_gen),
+        ast_c::Statement::DoWhile {
+            body,
+            condition,
+            loop_label,
+        } => emit_do_while(body, condition, loop_label, instructions, id_gen),
         ast_c::Statement::For { .. } => todo!(),
         ast_c::Statement::Null => None,
     }
@@ -523,6 +538,100 @@ fn emit_exp_conditional(
     instructions.push(Instruction::Label(label_end));
 
     result
+}
+
+fn start_label<T: AsRef<str>>(label: T) -> Identifier {
+    format!("start_{}", label.as_ref()).into()
+}
+
+fn break_label<T: AsRef<str>>(label: T) -> Identifier {
+    format!("break_{}", label.as_ref()).into()
+}
+
+fn continue_label<T: AsRef<str>>(label: T) -> Identifier {
+    format!("continue_{}", label.as_ref()).into()
+}
+
+fn emit_jump(label: &Identifier) -> Instruction {
+    Instruction::Jump {
+        target: label.clone(),
+    }
+}
+
+fn emit_do_while(
+    body: &ast_c::Statement,
+    condition: &ast_c::Expression,
+    loop_label: &Option<crate::lexer::Identifier>,
+    instructions: &mut Vec<Instruction>,
+    id_gen: &mut IdGenerator,
+) -> Option<Instruction> {
+    let loop_label = loop_label
+        .clone()
+        .expect("Loop label must be provided for do-while");
+    let start_label = start_label(loop_label.clone());
+    instructions.push(Instruction::Label(start_label.clone()));
+
+    // loop body
+    let val = emit_statement(body, instructions, id_gen);
+    if let Some(val) = val {
+        instructions.push(val);
+    }
+
+    // Continue label
+    instructions.push(Instruction::Label(continue_label(loop_label.clone())));
+
+    // evaluate condition and compare to zero
+    let v = emit_expression(condition, instructions, id_gen);
+
+    // conditionally jump to beginning of loop
+    instructions.push(Instruction::JumpIfNotZero {
+        condition: v,
+        target: start_label,
+    });
+
+    // Break label
+    instructions.push(Instruction::Label(break_label(loop_label.clone())));
+
+    None
+}
+
+fn emit_while(
+    condition: &ast_c::Expression,
+    body: &ast_c::Statement,
+    loop_label: &Option<crate::lexer::Identifier>,
+    instructions: &mut Vec<Instruction>,
+    id_gen: &mut IdGenerator,
+) -> Option<Instruction> {
+    let loop_label = loop_label
+        .clone()
+        .expect("Loop label must be provided for do-while");
+    let continue_label = continue_label(loop_label.clone());
+    let break_label = break_label(loop_label.clone());
+
+    instructions.push(Instruction::Label(continue_label.clone()));
+
+    // evaluate condition and compare to zero
+    let v = emit_expression(condition, instructions, id_gen);
+
+    // conditionally jump to end of loop
+    instructions.push(Instruction::JumpIfZero {
+        condition: v,
+        target: break_label.clone(),
+    });
+
+    // loop body
+    let val = emit_statement(body, instructions, id_gen);
+    if let Some(val) = val {
+        instructions.push(val);
+    }
+
+    // Jump to continue label
+    instructions.push(emit_jump(&continue_label));
+
+    // Break label
+    instructions.push(Instruction::Label(break_label));
+
+    None
 }
 
 #[cfg(test)]
