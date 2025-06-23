@@ -1,7 +1,7 @@
 use clap::Parser;
 use env_logger::Env;
 use line_numbers::LinePositions;
-use pcc::{Error, StopAfter, do_the_thing};
+use pcc::{do_the_thing, Error, StopAfter};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -67,6 +67,10 @@ fn main() -> anyhow::Result<()> {
         tacky: cli.tacky,
         codegen: cli.codegen,
     };
+
+    // TODO: Due to the preprocessor not emitting #line directives, the reported
+    //       line numbers in errors may be incorrect. This is a known issue due to
+    //       the preprocessor using the -P option.
 
     match do_the_thing(&input, cli.input, cli.output, stop_after) {
         Ok(_) => Ok(()),

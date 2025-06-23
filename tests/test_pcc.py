@@ -19,11 +19,15 @@ class CProgram:
 VALID_C_PROGRAMS = {
     "compound_statements": CProgram(Path("tests/c/valid/compound_statements.c"), 3),
     "conditional": CProgram(Path("tests/c/valid/conditional.c"),),# 3),
-    "if_else": CProgram(Path("tests/c/valid/if_else.c"),),# 3),
+    "do_while": CProgram(Path("tests/c/valid/do_while.c"),),# 25),
+    "for": CProgram(Path("tests/c/valid/for.c"),),# 150),
     "goto": CProgram(Path("tests/c/valid/goto.c"), 9),
+    "if_else": CProgram(Path("tests/c/valid/if_else.c"),),# 3),
+    "nested_loops": CProgram(Path("tests/c/valid/nested_loops.c"),),# 3),
     "return_2": CProgram(Path("tests/c/valid/return_2.c"),),# 2),
     "return_1+2": CProgram(Path("tests/c/valid/return_1+2.c"),),# 3),
     "return_logical_ops": CProgram(Path("tests/c/valid/return_logical_ops.c"),),# 1),
+    "while": CProgram(Path("tests/c/valid/while.c"),),# 25),
 }
 
 @dataclass

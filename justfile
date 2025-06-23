@@ -98,5 +98,5 @@ ch8: check-i386
     #book-tests/test_compiler ./pcc.py --chapter 8 --stage lex
     #book-tests/test_compiler ./pcc.py --chapter 8 --stage parse
     #book-tests/test_compiler ./pcc.py --chapter 8 --stage validate
-    book-tests/test_compiler ./pcc.py --chapter 8
-    #book-tests/test_compiler ./pcc.py --chapter 8 --bitwise --goto
+    #book-tests/test_compiler ./pcc.py --chapter 8
+    book-tests/test_compiler ./pcc.py --chapter 8 --bitwise --goto

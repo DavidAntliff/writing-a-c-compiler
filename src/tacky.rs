@@ -314,22 +314,40 @@ fn emit_block(
     id_gen: &mut IdGenerator,
 ) -> Option<Instruction> {
     for item in &block.items {
-        match item {
-            ast_c::BlockItem::S(statement) => {
-                if let Some(instruction) = emit_statement(statement, instructions, id_gen) {
-                    instructions.push(instruction);
-                }
-            }
-            ast_c::BlockItem::D(ast_c::Declaration { name, init }) => {
-                if let Some(init) = init {
-                    let result = emit_expression(init, instructions, id_gen);
-                    instructions.push(Instruction::Copy {
-                        src: result,
-                        dst: Val::Var(name.clone().into()),
-                    });
-                }
+        emit_block_item(item, instructions, id_gen);
+    }
+    None
+}
+
+fn emit_block_item(
+    item: &ast_c::BlockItem,
+    instructions: &mut Vec<Instruction>,
+    id_gen: &mut IdGenerator,
+) -> Option<Instruction> {
+    match item {
+        ast_c::BlockItem::S(statement) => {
+            if let Some(instruction) = emit_statement(statement, instructions, id_gen) {
+                instructions.push(instruction);
             }
         }
+        ast_c::BlockItem::D(declaration) => {
+            emit_declaration(declaration, instructions, id_gen);
+        }
+    }
+    None
+}
+
+fn emit_declaration(
+    decl: &ast_c::Declaration,
+    instructions: &mut Vec<Instruction>,
+    id_gen: &mut IdGenerator,
+) -> Option<Instruction> {
+    if let Some(init) = &decl.init {
+        let result = emit_expression(init, instructions, id_gen);
+        instructions.push(Instruction::Copy {
+            src: result,
+            dst: Val::Var(decl.name.clone().into()),
+        });
     }
     None
 }
@@ -385,7 +403,21 @@ fn emit_statement(
             condition,
             loop_label,
         } => emit_do_while(body, condition, loop_label, instructions, id_gen),
-        ast_c::Statement::For { .. } => todo!(),
+        ast_c::Statement::For {
+            init,
+            condition,
+            post,
+            body,
+            loop_label,
+        } => emit_for(
+            init,
+            condition,
+            post,
+            body,
+            loop_label,
+            instructions,
+            id_gen,
+        ),
         ast_c::Statement::Null => None,
     }
 }
@@ -627,6 +659,70 @@ fn emit_while(
 
     // Jump to continue label
     instructions.push(emit_jump(&continue_label));
+
+    // Break label
+    instructions.push(Instruction::Label(break_label));
+
+    None
+}
+
+fn emit_for(
+    init: &ast_c::ForInit,
+    condition: &Option<ast_c::Expression>,
+    post: &Option<ast_c::Expression>,
+    body: &ast_c::Statement,
+    loop_label: &Option<crate::lexer::Identifier>,
+    instructions: &mut Vec<Instruction>,
+    id_gen: &mut IdGenerator,
+) -> Option<Instruction> {
+    let loop_label = loop_label
+        .clone()
+        .expect("Loop label must be provided for for-loop");
+    let start_label = start_label(loop_label.clone());
+    let continue_label = continue_label(loop_label.clone());
+    let break_label = break_label(loop_label.clone());
+
+    // Emit initialization
+    if let ast_c::ForInit::InitExp(Some(exp)) = init {
+        let v = emit_expression(exp, instructions, id_gen);
+        instructions.push(Instruction::Copy {
+            src: v,
+            dst: Val::Var(next_var(id_gen)),
+        });
+    } else if let ast_c::ForInit::InitDecl(decl) = init {
+        let _ = emit_declaration(decl, instructions, id_gen);
+    }
+
+    instructions.push(Instruction::Label(start_label.clone()));
+
+    // Evaluate condition if present
+    if let Some(cond) = condition {
+        let v = emit_expression(cond, instructions, id_gen);
+        instructions.push(Instruction::JumpIfZero {
+            condition: v,
+            target: break_label.clone(),
+        });
+    }
+
+    // Loop body
+    let val = emit_statement(body, instructions, id_gen);
+    if let Some(val) = val {
+        instructions.push(val);
+    }
+
+    instructions.push(Instruction::Label(continue_label.clone()));
+
+    // Post-expression
+    if let Some(post_exp) = post {
+        let v = emit_expression(post_exp, instructions, id_gen);
+        instructions.push(Instruction::Copy {
+            src: v,
+            dst: Val::Var(next_var(id_gen)),
+        });
+    }
+
+    // Jump to start label
+    instructions.push(emit_jump(&start_label));
 
     // Break label
     instructions.push(Instruction::Label(break_label));

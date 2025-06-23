@@ -55,6 +55,7 @@ def preprocess(filename: Path) -> Path:
     Generate .i file from the source code.
     """
     target = filename.with_suffix('.i')
+    # TODO: remove the -P option to keep line numbers in the output
     cmd = f"gcc -E -P {filename} -o {target}"
     logger.debug(f"Preprocessing command: {cmd}")
     result = subprocess.run(cmd, shell=True, capture_output=True)
