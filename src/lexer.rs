@@ -81,6 +81,7 @@ pub(crate) enum TokenKind {
     Assignment,         // =
     QuestionMark,       // ?
     Colon,              // :
+    Comma,              // ,
 }
 
 impl TokenKind {
@@ -207,6 +208,7 @@ fn token(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
             assignment,
             question_mark,
             colon,
+            comma,
         )),
     ))
     .parse_next(input)
@@ -548,6 +550,15 @@ fn colon(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
     ":".with_span()
         .map(|(_, span)| Token {
             kind: TokenKind::Colon,
+            span,
+        })
+        .parse_next(input)
+}
+
+fn comma(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
+    ",".with_span()
+        .map(|(_, span)| Token {
+            kind: TokenKind::Comma,
             span,
         })
         .parse_next(input)

@@ -1,5 +1,5 @@
 # test_compiler also tests previous chapters
-default: test ch8 pytest
+default: test ch9 pytest
 
 
 check-i386:
@@ -100,3 +100,8 @@ ch8: check-i386
     #book-tests/test_compiler ./pcc.py --chapter 8 --stage validate
     #book-tests/test_compiler ./pcc.py --chapter 8
     book-tests/test_compiler ./pcc.py --chapter 8 --bitwise --goto
+
+
+ch9: check-i386
+    cargo build
+    book-tests/test_compiler ./pcc.py --chapter 9 --stage lex

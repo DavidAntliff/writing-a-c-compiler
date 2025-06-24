@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--codegen", action="store_true", help="Run up to codegen output only")
     parser.add_argument("-o", "--output", help="Path to the compiled binary (optional)", default=None)
     parser.add_argument("-S", "--asm", action="store_true", help="Generate assembly code")
+    parser.add_argument("-c", action="store_true", dest="skip_link", help="Generate object code, skip linker")
 
     args = parser.parse_args()
     logging.basicConfig(level=args.loglevel)
@@ -44,7 +45,7 @@ def main():
 
     try:
         if not (args.lex or args.parse or args.validate or args.tacky or args.codegen):
-            assemble_and_link(assembly_file, args.output)
+            assemble_and_link(assembly_file, args.output, args.skip_link)
     finally:
         if not args.asm and assembly_file is not None:
             assembly_file.unlink(missing_ok=True)
@@ -107,11 +108,11 @@ def compile(filename: Path,
     return target
 
 
-def assemble_and_link(filename: Path, output_file: Path | None):
+def assemble_and_link(filename: Path, output_file: Path | None, skip_link: bool = False):
     if output_file is None:
-        output_file = filename.with_suffix("")
+        output_file = filename.with_suffix(".o" if skip_link else "")
     #cmd = f"gcc -arch x86_64 {filename} -o {output_file}"
-    cmd = f"gcc {filename} -o {output_file}"
+    cmd = f"gcc {'-c' if skip_link else ''} {filename} -o {output_file}"
     logger.debug(f"Assemble and link command: {cmd}")
     result = subprocess.run(cmd, shell=True, capture_output=True)
     if result.returncode != 0:

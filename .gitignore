@@ -1,5 +1,6 @@
 /target
 book-tests
+*.o
 a.out
 gcc.*
 
