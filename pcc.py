@@ -19,7 +19,7 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_const", dest="loglevel", const=logging.INFO,
                         help="Show more output")
 
-    parser.add_argument("filename", help="Path to the file to be compiled")
+    parser.add_argument("filenames", nargs="+", help="Path to the file(s) to be compiled")
     parser.add_argument("--lex", action="store_true", help="Run up to the lexer output only")
     parser.add_argument("--parse", action="store_true", help="Run up to the parser output only")
     parser.add_argument("--validate", action="store_true", help="Run up to the semantic analysis output only")
@@ -33,22 +33,24 @@ def main():
     logging.basicConfig(level=args.loglevel)
 
     preprocessed_file = None
-    assembly_file = None
+    assembly_files = []
 
-    # If an error occurs, delete all intermediate files
-    try:
-        preprocessed_file = preprocess(Path(args.filename))
-        assembly_file = compile(preprocessed_file, args.lex, args.parse, args.validate, args.tacky, args.codegen)
-    finally:
-        if preprocessed_file is not None:
-            preprocessed_file.unlink(missing_ok=True)
+    for filename in args.filenames:
+        # If an error occurs, delete all intermediate files
+        try:
+            preprocessed_file = preprocess(Path(filename))
+            assembly_files.append(compile(preprocessed_file, args.lex, args.parse, args.validate, args.tacky, args.codegen))
+        finally:
+            if preprocessed_file is not None:
+                preprocessed_file.unlink(missing_ok=True)
 
     try:
         if not (args.lex or args.parse or args.validate or args.tacky or args.codegen):
-            assemble_and_link(assembly_file, args.output, args.skip_link)
+            assemble_and_link(assembly_files, args.output, args.skip_link)
     finally:
-        if not args.asm and assembly_file is not None:
-            assembly_file.unlink(missing_ok=True)
+        if not args.asm:
+            for assembly_file in assembly_files:
+                assembly_file.unlink(missing_ok=True)
 
 
 def preprocess(filename: Path) -> Path:
@@ -108,11 +110,15 @@ def compile(filename: Path,
     return target
 
 
-def assemble_and_link(filename: Path, output_file: Path | None, skip_link: bool = False):
+def assemble_and_link(filenames: list[Path], output_file: Path | None, skip_link: bool = False):
     if output_file is None:
-        output_file = filename.with_suffix(".o" if skip_link else "")
+        if len(filenames) == 1:
+            output_file = filenames[0].with_suffix(".o" if skip_link else "")
+        else:
+            output_file = "a.out"
     #cmd = f"gcc -arch x86_64 {filename} -o {output_file}"
-    cmd = f"gcc {'-c' if skip_link else ''} {filename} -o {output_file}"
+    filenames_s = " ".join((str(f) for f in filenames))
+    cmd = f"gcc {'-c' if skip_link else ''} {filenames_s} -o {output_file}"
     logger.debug(f"Assemble and link command: {cmd}")
     result = subprocess.run(cmd, shell=True, capture_output=True)
     if result.returncode != 0:
