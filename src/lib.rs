@@ -141,7 +141,7 @@ fn lex_parse_analyse_and_codegen(input: &str) -> Result<ast_asm::Program, Error>
 mod tests {
     use super::*;
 
-    use crate::ast_c::{Block, BlockItem, Expression, Function, Program, Statement};
+    use crate::ast_c::{Block, BlockItem, Expression, FunDecl, Program, Statement};
     use crate::parser::ParserError;
     use assert_matches::assert_matches;
 
@@ -169,12 +169,13 @@ mod tests {
         assert_eq!(
             lex_and_parse(input).unwrap(),
             Program {
-                function: Function {
+                function_declarations: vec![FunDecl {
                     name: "main".into(),
-                    body: Block {
+                    params: vec!["void".into()],
+                    body: Some(Block {
                         items: vec![BlockItem::S(Statement::Return(Expression::Constant(2)))]
-                    },
-                }
+                    }),
+                }]
             }
         );
     }
@@ -286,6 +287,7 @@ mod tests {
         int main(void) {
             return --2;
         }"#;
+        let x = lex_and_parse(input);
         assert_matches!(
             lex_and_parse(input).unwrap_err(),
             Error::Parser(ParserError {

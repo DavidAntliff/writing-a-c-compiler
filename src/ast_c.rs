@@ -1,12 +1,13 @@
 //! AST for the C language
 //!
 //! ASDL:
-//!   program = Program(function_definition)
-//!   function_definition = Function(identifier name, block body)
+//!   program = Program(function_declaration*)
+//!   declaration = FunDecl(function_declaration) | VarDecl(variable_declaration)
+//!   variable_declaration = (identifier name, exp? init)
+//!   function_declaration = (identifier name, identifier* params, block? body)
 //!   block_item = S(statement) | D(declaration)
 //!   block = Block(block_item*)
-//!   declaration = Declaration(identifier name, exp? init)
-//!   for_init = InitDecl(declaration) | InitExp(exp?)
+//!   for_init = InitDecl(variable_declaration) | InitExp(exp?)
 //!   statement = Labeled(identifier label, statement)
 //!             | Return(exp)
 //!             | Expression(exp)
@@ -25,6 +26,7 @@
 //!       | Binary(binary_operator, exp, exp)
 //!       | Assignment(exp, exp)
 //!       | Conditional(exp condition, exp, exp)
+//!       | FunctionCall(identifier, exp* args)
 //!   unary_operator = Complement | Negate | Not
 //!   binary_operator = Add | Subtract | Multiply | Divide | Remainder
 //!                   | BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
@@ -35,13 +37,14 @@ use crate::lexer::Identifier;
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Program {
-    pub(crate) function: Function,
+    pub(crate) function_declarations: Vec<FunDecl>,
 }
 
-#[derive(Debug, PartialEq)]
-pub(crate) struct Function {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct FunDecl {
     pub(crate) name: Identifier,
-    pub(crate) body: Block,
+    pub(crate) params: Vec<Identifier>,
+    pub(crate) body: Option<Block>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -56,7 +59,13 @@ pub(crate) enum BlockItem {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Declaration {
+pub(crate) enum Declaration {
+    FunDecl(FunDecl),
+    VarDecl(VarDecl),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct VarDecl {
     pub(crate) name: Identifier,
     pub(crate) init: Option<Expression>,
 }
@@ -100,7 +109,7 @@ pub(crate) enum Statement {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum ForInit {
-    InitDecl(Declaration),
+    InitDecl(VarDecl),
     InitExp(Option<Expression>),
 }
 
@@ -112,6 +121,7 @@ pub(crate) enum Expression {
     Binary(BinaryOperator, Box<Expression>, Box<Expression>),
     Assignment(Box<Expression>, Box<Expression>),
     Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
+    FunctionCall(Identifier, Vec<Expression>),
 }
 
 #[derive(Debug, PartialEq, Clone)]

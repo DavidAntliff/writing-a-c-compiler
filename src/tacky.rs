@@ -19,7 +19,7 @@
 //!
 
 use crate::ast_c;
-use crate::ast_c::Block;
+//use crate::ast_c::{Block, Declaration, VarDecl};
 use crate::id_gen::IdGenerator;
 use thiserror::Error;
 
@@ -120,26 +120,29 @@ pub struct TackyError {
 }
 
 pub(crate) fn emit_program(program: &ast_c::Program) -> Result<Program, TackyError> {
-    let function_definition = emit_function(&program.function)?;
+    let mut fun_defs = vec![];
+    for fun_decl in &program.function_declarations {
+        fun_defs.push(emit_function_declaration(fun_decl)?);
+    }
 
+    // TODO
     Ok(Program {
-        function_definition,
+        function_definition: fun_defs.pop().unwrap(), // TODO
     })
 }
 
-fn emit_function(
-    function: &ast_c::Function,
-    // instructions: &mut Vec<Instruction>,
-    // id_gen: &mut IdGenerator,
+fn emit_function_declaration(
+    function_decl: &ast_c::FunDecl,
 ) -> Result<FunctionDefinition, TackyError> {
-    let name: Identifier = (&function.name).into();
+    let name: Identifier = (&function_decl.name).into();
 
     let mut instructions = vec![];
     let mut id_gen = IdGenerator::new();
 
-    // Expect None
-    let val = emit_block(&function.body, &mut instructions, &mut id_gen);
-    assert!(val.is_none(), "emit_block should return None");
+    if let Some(body) = &function_decl.body {
+        let val = emit_block(body, &mut instructions, &mut id_gen);
+        assert!(val.is_none(), "emit_block should return None");
+    }
 
     // Add a Return(0) to the end of all functions (see page 112)
     instructions.push(Instruction::Return(Val::Constant(0)));
@@ -273,6 +276,10 @@ fn emit_expression(
         ast_c::Expression::Conditional(cond, e1, e2) => {
             emit_exp_conditional(cond, e1, e2, instructions, id_gen)
         }
+
+        ast_c::Expression::FunctionCall(..) => {
+            todo!()
+        }
     }
 }
 
@@ -309,7 +316,7 @@ fn convert_binop(op: &ast_c::BinaryOperator) -> BinaryOperator {
 }
 
 fn emit_block(
-    block: &Block,
+    block: &ast_c::Block,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
 ) -> Option<Instruction> {
@@ -342,11 +349,27 @@ fn emit_declaration(
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
 ) -> Option<Instruction> {
-    if let Some(init) = &decl.init {
+    match decl {
+        ast_c::Declaration::FunDecl(_) => {
+            todo!()
+        }
+        ast_c::Declaration::VarDecl(decl) => {
+            emit_variable_declaration(decl, instructions, id_gen);
+        }
+    }
+    None
+}
+
+fn emit_variable_declaration(
+    ast_c::VarDecl { name, init }: &ast_c::VarDecl,
+    instructions: &mut Vec<Instruction>,
+    id_gen: &mut IdGenerator,
+) -> Option<Instruction> {
+    if let Some(init) = &init {
         let result = emit_expression(init, instructions, id_gen);
         instructions.push(Instruction::Copy {
             src: result,
-            dst: Val::Var(decl.name.clone().into()),
+            dst: Val::Var(name.clone().into()),
         });
     }
     None
@@ -690,7 +713,7 @@ fn emit_for(
             dst: Val::Var(next_var(id_gen)),
         });
     } else if let ast_c::ForInit::InitDecl(decl) = init {
-        let _ = emit_declaration(decl, instructions, id_gen);
+        let _ = emit_variable_declaration(decl, instructions, id_gen);
     }
 
     instructions.push(Instruction::Label(start_label.clone()));
@@ -868,9 +891,10 @@ mod tests {
     fn test_parse_program_return_unary_nested() {
         // int main(void) { return -(~(-8)); }
         let program = ast_c::Program {
-            function: ast_c::Function {
+            function_declarations: vec![ast_c::FunDecl {
                 name: "main".into(),
-                body: Block {
+                params: vec!["void".into()],
+                body: Some(Block {
                     items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
                         ast_c::Expression::Unary(
                             ast_c::UnaryOperator::Negate,
@@ -883,8 +907,8 @@ mod tests {
                             )),
                         ),
                     ))],
-                },
-            },
+                }),
+            }],
         };
 
         assert_eq!(
@@ -921,9 +945,10 @@ mod tests {
     fn test_parse_program_return_binary() {
         // int main(void) { return 1 * 2 - 3 * (4 + 5); }   // -25
         let program = ast_c::Program {
-            function: ast_c::Function {
+            function_declarations: vec![ast_c::FunDecl {
                 name: "main".into(),
-                body: Block {
+                params: vec!["void".into()],
+                body: Some(Block {
                     items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
                         ast_c::Expression::Binary(
                             ast_c::BinaryOperator::Subtract,
@@ -943,8 +968,8 @@ mod tests {
                             )),
                         ),
                     ))],
-                },
-            },
+                }),
+            }],
         };
 
         assert_eq!(
@@ -1405,24 +1430,25 @@ mod tests {
         //     return b;
         // }
         let program = ast_c::Program {
-            function: ast_c::Function {
+            function_declarations: vec![ast_c::FunDecl {
                 name: "main".into(),
-                body: Block {
+                params: vec!["void".into()],
+                body: Some(Block {
                     items: vec![
                         // int b;
-                        ast_c::BlockItem::D(ast_c::Declaration {
+                        ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
                             name: "b.98".into(),
                             init: None,
-                        }),
+                        })),
                         // int a = 10 + 1;
-                        ast_c::BlockItem::D(ast_c::Declaration {
+                        ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
                             name: "a.99".into(),
                             init: Some(ast_c::Expression::Binary(
                                 ast_c::BinaryOperator::Add,
                                 Box::new(ast_c::Expression::Constant(10)),
                                 Box::new(ast_c::Expression::Constant(1)),
                             )),
-                        }),
+                        })),
                         // b = a * 2;
                         ast_c::BlockItem::S(ast_c::Statement::Expression(
                             ast_c::Expression::Assignment(
@@ -1439,8 +1465,8 @@ mod tests {
                             "b.98".into(),
                         ))),
                     ],
-                },
-            },
+                }),
+            }],
         };
 
         // Listing 5-14: Expected TACKY:
@@ -1673,9 +1699,10 @@ mod tests {
         //     label2: return 2;
         // }
         let program = ast_c::Program {
-            function: ast_c::Function {
+            function_declarations: vec![ast_c::FunDecl {
                 name: "main".into(),
-                body: Block {
+                params: vec!["void".into()],
+                body: Some(Block {
                     items: vec![
                         ast_c::BlockItem::S(ast_c::Statement::Goto("label1".into())),
                         ast_c::BlockItem::S(ast_c::Statement::Labeled {
@@ -1697,8 +1724,8 @@ mod tests {
                             )),
                         }),
                     ],
-                },
-            },
+                }),
+            }],
         };
 
         // Listing 5-14: Expected TACKY:

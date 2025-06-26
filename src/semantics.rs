@@ -1,5 +1,5 @@
 use crate::ast_c::{
-    Block, BlockItem, Declaration, Expression, ForInit, Function, Program, Statement,
+    Block, BlockItem, Declaration, Expression, ForInit, FunDecl, Program, Statement, VarDecl,
 };
 use crate::id_gen::IdGenerator;
 use std::collections::HashMap;
@@ -37,8 +37,9 @@ pub(crate) fn analyse(program: &mut Program) -> Result<(), Error> {
 
     loop_labeling(program)?;
 
-    // TODO: for each function...
-    goto_label_resolution(&program.function)?;
+    for function in &program.function_declarations {
+        goto_label_resolution(function)?;
+    }
 
     Ok(())
 }
@@ -47,8 +48,13 @@ fn variable_resolution(program: &mut Program) -> Result<(), Error> {
     let mut variable_map = HashMap::<String, MapEntry>::new();
     let mut id_gen = IdGenerator::new();
 
-    // TODO: for globals, and for each function:
-    program.function.body = resolve_block(&program.function.body, &mut variable_map, &mut id_gen)?;
+    // TODO: for globals
+
+    for function in &mut program.function_declarations {
+        if let Some(body) = &mut function.body {
+            *body = resolve_block(body, &mut variable_map, &mut id_gen)?;
+        }
+    }
 
     Ok(())
 }
@@ -91,10 +97,27 @@ fn resolve_block(
 }
 
 fn resolve_declaration(
-    Declaration { name, init }: &Declaration,
+    declaration: &Declaration,
     variable_map: &mut HashMap<String, MapEntry>,
     id_gen: &mut IdGenerator,
 ) -> Result<Declaration, Error> {
+    match declaration {
+        Declaration::FunDecl(_) => {
+            todo!()
+        }
+        Declaration::VarDecl(var_decl) => Ok(Declaration::VarDecl(resolve_variable_declaration(
+            var_decl,
+            variable_map,
+            id_gen,
+        )?)),
+    }
+}
+
+fn resolve_variable_declaration(
+    VarDecl { name, init }: &VarDecl,
+    variable_map: &mut HashMap<String, MapEntry>,
+    id_gen: &mut IdGenerator,
+) -> Result<VarDecl, Error> {
     if variable_map.contains_key(name) && variable_map[name].from_current_block {
         return Err(Error::DuplicateVariableDeclaration(name.clone()));
     }
@@ -114,7 +137,7 @@ fn resolve_declaration(
         None
     };
 
-    Ok(Declaration {
+    Ok(VarDecl {
         name: unique_name,
         init,
     })
@@ -261,6 +284,9 @@ fn resolve_exp(
             resolve_exp(then, variable_map)?.into(),
             resolve_exp(else_, variable_map)?.into(),
         )),
+        Expression::FunctionCall(..) => {
+            todo!()
+        }
     }
 }
 
@@ -270,7 +296,7 @@ fn resolve_for_init(
     id_gen: &mut IdGenerator,
 ) -> Result<ForInit, Error> {
     match init {
-        ForInit::InitDecl(decl) => Ok(ForInit::InitDecl(resolve_declaration(
+        ForInit::InitDecl(decl) => Ok(ForInit::InitDecl(resolve_variable_declaration(
             decl,
             variable_map,
             id_gen,
@@ -294,9 +320,13 @@ fn loop_labeling(program: &mut Program) -> Result<(), Error> {
     let mut variable_map = HashMap::<String, MapEntry>::new();
     let mut id_gen = IdGenerator::new();
 
-    // TODO: for globals, and for each function:
-    program.function.body =
-        loop_label_block(&program.function.body, &mut variable_map, &mut id_gen)?;
+    // TODO: for globals
+
+    for function in &mut program.function_declarations {
+        if let Some(body) = &mut function.body {
+            *body = loop_label_block(body, &mut variable_map, &mut id_gen)?;
+        }
+    }
 
     Ok(())
 }
@@ -452,23 +482,25 @@ fn loop_label_statement(
 
 // GOTO labels:
 
-fn goto_label_resolution(function: &Function) -> Result<(), Error> {
+fn goto_label_resolution(function_decl: &FunDecl) -> Result<(), Error> {
     let mut labels = HashMap::<String, usize>::new();
 
-    // AST is a tree, so we need to traverse it recursively,
-    // building up the labels as we go, then check for duplicates afterwards.
-    for item in function.body.items.iter() {
-        if let BlockItem::S(statement) = item {
-            let nested_labels = nested_goto_labels(statement)?;
-            extend_goto_labels(&mut labels, &nested_labels)?;
+    if let Some(body) = &function_decl.body {
+        // AST is a tree, so we need to traverse it recursively,
+        // building up the labels as we go, then check for duplicates afterwards.
+        for item in body.items.iter() {
+            if let BlockItem::S(statement) = item {
+                let nested_labels = nested_goto_labels(statement)?;
+                extend_goto_labels(&mut labels, &nested_labels)?;
+            }
         }
-    }
 
-    // Check for undeclared labels in Goto statements
-    for item in &function.body.items {
-        if let BlockItem::S(Statement::Goto(label)) = item {
-            if !labels.contains_key(label) {
-                return Err(Error::UndeclaredLabel(label.as_str().to_owned()));
+        // Check for undeclared labels in Goto statements
+        for item in &body.items {
+            if let BlockItem::S(Statement::Goto(label)) = item {
+                if !labels.contains_key(label) {
+                    return Err(Error::UndeclaredLabel(label.as_str().to_owned()));
+                }
             }
         }
     }
@@ -543,39 +575,40 @@ fn nested_goto_labels(statement: &Statement) -> Result<HashMap<String, usize>, E
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast_c::{BinaryOperator, Block, Function};
+    use crate::ast_c::{BinaryOperator, Block, FunDecl, VarDecl};
     use assert_matches::assert_matches;
 
     #[test]
     fn test_analyse() {
         let mut program = Program {
-            function: Function {
+            function_declarations: vec![FunDecl {
                 name: "main".into(),
-                body: Block {
+                params: vec!["void".into()],
+                body: Some(Block {
                     items: vec![
-                        BlockItem::D(Declaration {
+                        BlockItem::D(Declaration::VarDecl(VarDecl {
                             name: "x".into(),
                             init: Some(Expression::Constant(42)),
-                        }),
+                        })),
                         BlockItem::S(Statement::Return(Expression::Var("x".into()))),
                     ],
-                },
-            },
+                }),
+            }],
         };
 
         assert!(variable_resolution(&mut program).is_ok());
 
         assert_eq!(
-            program.function.body,
-            Block {
+            program.function_declarations[0].body,
+            Some(Block {
                 items: vec![
-                    BlockItem::D(Declaration {
+                    BlockItem::D(Declaration::VarDecl(VarDecl {
                         name: "x.0".into(),
                         init: Some(Expression::Constant(42)),
-                    }),
+                    })),
                     BlockItem::S(Statement::Return(Expression::Var("x.0".into()))),
                 ]
-            }
+            })
         );
     }
 
@@ -584,9 +617,10 @@ mod tests {
         // check for undeclared label
 
         let mut program = Program {
-            function: Function {
+            function_declarations: vec![FunDecl {
                 name: "main".into(),
-                body: Block {
+                params: vec!["void".into()],
+                body: Some(Block {
                     items: vec![
                         BlockItem::S(Statement::Goto("label1".into())),
                         BlockItem::S(Statement::Labeled {
@@ -595,8 +629,8 @@ mod tests {
                         }),
                         BlockItem::S(Statement::Return(Expression::Constant(0))),
                     ],
-                },
-            },
+                }),
+            }],
         };
 
         assert!(analyse(&mut program).is_err());
@@ -606,9 +640,10 @@ mod tests {
     fn test_goto_duplicate_label() {
         // check for duplicate label
         let mut program = Program {
-            function: Function {
+            function_declarations: vec![FunDecl {
                 name: "main".into(),
-                body: Block {
+                params: vec!["void".into()],
+                body: Some(Block {
                     items: vec![
                         BlockItem::S(Statement::Goto("label1".into())),
                         BlockItem::S(Statement::Labeled {
@@ -621,8 +656,8 @@ mod tests {
                         }),
                         BlockItem::S(Statement::Return(Expression::Constant(0))),
                     ],
-                },
-            },
+                }),
+            }],
         };
 
         assert!(analyse(&mut program).is_err());
@@ -632,9 +667,10 @@ mod tests {
     fn test_goto_duplicate_nested_label() {
         // check for duplicate label
         let mut program = Program {
-            function: Function {
+            function_declarations: vec![FunDecl {
                 name: "main".into(),
-                body: Block {
+                params: vec!["void".into()],
+                body: Some(Block {
                     items: vec![
                         BlockItem::S(Statement::Goto("label1".into())),
                         BlockItem::S(Statement::Labeled {
@@ -646,8 +682,8 @@ mod tests {
                         }),
                         BlockItem::S(Statement::Return(Expression::Constant(0))),
                     ],
-                },
-            },
+                }),
+            }],
         };
 
         assert!(analyse(&mut program).is_err());
@@ -667,9 +703,10 @@ mod tests {
         //         break;                             // -> loop 1
         // }
         let mut program = Program {
-            function: Function {
+            function_declarations: vec![FunDecl {
                 name: "main".into(),
-                body: Block {
+                params: vec!["void".into()],
+                body: Some(Block {
                     items: vec![BlockItem::S(Statement::While {
                         condition: Expression::Binary(
                             BinaryOperator::GreaterThan,
@@ -679,7 +716,7 @@ mod tests {
                         body: Box::new(Statement::Compound(Block {
                             items: vec![
                                 BlockItem::S(Statement::For {
-                                    init: ForInit::InitDecl(Declaration {
+                                    init: ForInit::InitDecl(VarDecl {
                                         name: "i".into(),
                                         init: Some(Expression::Constant(0)),
                                     }),
@@ -741,8 +778,8 @@ mod tests {
                         })),
                         loop_label: None,
                     })],
-                },
-            },
+                }),
+            }],
         };
 
         let result = loop_labeling(&mut program);
@@ -752,13 +789,13 @@ mod tests {
 
         // Outer loop should be labeled "while.0"
         assert_matches!(
-                    &program.function.body.items[0],
+                    &program.function_declarations[0].body.as_ref().unwrap().items[0],
                         BlockItem::S(stmt) if matches!(
                             &stmt, Statement::While { loop_label, .. } if *loop_label == Some("while.0".to_string())
             )
         );
         assert_matches!(
-            &program.function.body.items[0],
+            &program.function_declarations[0].body.as_ref().unwrap().items[0],
             BlockItem::S(stmt) if matches!(
                 &stmt, Statement::While { body, .. } if matches!(
                     &**body, Statement::Compound(block) if matches!(
@@ -773,7 +810,7 @@ mod tests {
 
         // Inner loop should be labeled "for.1"
         assert_matches!(
-            &program.function.body.items[0],
+            &program.function_declarations[0].body.as_ref().unwrap().items[0],
             BlockItem::S(stmt) if matches!(
                 &stmt, Statement::While { body, .. } if matches!(
                     &**body, Statement::Compound(block) if matches!(
@@ -783,7 +820,7 @@ mod tests {
             )
         );
         assert_matches!(
-            &program.function.body.items[0],
+            &program.function_declarations[0].body.as_ref().unwrap().items[0],
             BlockItem::S(stmt) if matches!(
                 &stmt, Statement::While { body, .. } if matches!(
                     &**body, Statement::Compound(block) if matches!(
