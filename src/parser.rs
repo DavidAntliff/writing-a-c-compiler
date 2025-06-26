@@ -43,9 +43,11 @@ use crate::ast_c::{
     BinaryOperator, Block, BlockItem, Declaration, Expression, ForInit, FunDecl, Program,
     Statement, UnaryOperator, VarDecl,
 };
-use crate::lexer::{Keyword, Token, TokenKind};
+use crate::lexer::{Identifier, Keyword, Token, TokenKind};
 use thiserror::Error;
-use winnow::combinator::{alt, fail, opt, peek, repeat, repeat_till, terminated, trace};
+use winnow::combinator::{
+    alt, cut_err, fail, opt, peek, preceded, repeat, repeat_till, separated, terminated, trace,
+};
 use winnow::dispatch;
 use winnow::error::{StrContext, StrContextValue};
 use winnow::prelude::*;
@@ -159,22 +161,12 @@ impl<const LEN: usize> winnow::stream::ContainsToken<&'_ Token> for [TokenKind; 
 pub(crate) fn parse(input: &[Token]) -> Result<Program, ParserError> {
     let tokens = Tokens::new(input);
     let program = program.parse(tokens).map_err(ParserError::from_parse)?;
-    // TODO REMOVE THIS
-    // let program = program.parse(tokens);
-    // let program = match program {
-    //     Ok(program) => program,
-    //     Err(e) => {
-    //         let error = ParserError::from_parse(e);
-    //         log::error!("Parser error: {}", error.message);
-    //         return Err(error);
-    //     }
-    // };
     Ok(program)
 }
 
-fn program(i: &mut Tokens<'_>) -> winnow::Result<Program> {
+fn program(i: &mut Tokens<'_>) -> ModalResult<Program> {
     let function_declarations = repeat(
-        1..,
+        0..,
         function_declaration
             .context(StrContext::Label("program"))
             .context(StrContext::Expected(StrContextValue::Description(
@@ -187,7 +179,7 @@ fn program(i: &mut Tokens<'_>) -> winnow::Result<Program> {
     })
 }
 
-fn function_declaration(i: &mut Tokens<'_>) -> winnow::Result<FunDecl> {
+fn function_declaration(i: &mut Tokens<'_>) -> ModalResult<FunDecl> {
     literal(TokenKind::Keyword(Keyword::Int))
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -195,48 +187,99 @@ fn function_declaration(i: &mut Tokens<'_>) -> winnow::Result<FunDecl> {
         )))
         .parse_next(i)?;
 
-    let name = identifier
-        .context(StrContext::Label("function"))
-        .context(StrContext::Expected(StrContextValue::Description(
-            "identifier",
-        )))
-        .parse_next(i)?;
+    // After this point, any error is fatal
 
+    cut_err(|i: &mut Tokens| {
+        let name = identifier
+            .context(StrContext::Label("function"))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "identifier",
+            )))
+            .parse_next(i)?;
+
+        let params = parameter_list.parse_next(i)?;
+
+        let body = alt((block.map(Some), literal(TokenKind::Semicolon).map(|_| None)))
+            .context(StrContext::Label("function"))
+            .context(StrContext::Expected(StrContextValue::Description("block")))
+            .parse_next(i)?;
+
+        Ok(FunDecl { name, params, body })
+    })
+    .parse_next(i)
+}
+
+fn parameter_list(i: &mut Tokens<'_>) -> ModalResult<Vec<Identifier>> {
     literal(TokenKind::OpenParen)
-        .context(StrContext::Label("function"))
+        .context(StrContext::Label("parameter list"))
         .context(StrContext::Expected(StrContextValue::StringLiteral("(")))
         .parse_next(i)?;
 
-    // TODO: comma-separated parameters
-    let params = vec!["void".to_string()];
-
-    literal(TokenKind::Keyword(Keyword::Void))
-        .context(StrContext::Label("function"))
-        .context(StrContext::Expected(StrContextValue::Description(
-            "keyword",
-        )))
-        .parse_next(i)?;
+    let parameters = alt((
+        literal(TokenKind::Keyword(Keyword::Void)).map(|_| vec![]),
+        separated(
+            // no parameters means an unspecified number of parameters, which we don't support yet
+            1..,
+            preceded(
+                literal(TokenKind::Keyword(Keyword::Int))
+                    .context(StrContext::Label("parameter list"))
+                    .context(StrContext::Expected(StrContextValue::Description("int"))),
+                identifier
+                    .context(StrContext::Label("parameter list"))
+                    .context(StrContext::Expected(StrContextValue::Description(
+                        "identifier",
+                    ))),
+            ),
+            literal(TokenKind::Comma)
+                .context(StrContext::Label("parameter list"))
+                .context(StrContext::Expected(StrContextValue::StringLiteral(","))),
+        ),
+        fail.context(StrContext::Label("parameter list"))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "keyword",
+            ))),
+    ))
+    .parse_next(i)?;
 
     literal(TokenKind::CloseParen)
-        .context(StrContext::Label("function"))
+        .context(StrContext::Label("paremeter list"))
         .context(StrContext::Expected(StrContextValue::StringLiteral(")")))
         .parse_next(i)?;
 
-    let body = alt((block.map(Some), literal(TokenKind::Semicolon).map(|_| None)))
-        .context(StrContext::Label("function"))
-        .context(StrContext::Expected(StrContextValue::Description("block")))
-        .parse_next(i)?;
-
-    Ok(FunDecl { name, params, body })
+    Ok(parameters)
 }
 
-fn block(i: &mut Tokens<'_>) -> winnow::Result<Block> {
+fn argument_list(i: &mut Tokens<'_>) -> ModalResult<Vec<Expression>> {
+    literal(TokenKind::OpenParen)
+        .context(StrContext::Label("argument list"))
+        .context(StrContext::Expected(StrContextValue::StringLiteral("(")))
+        .parse_next(i)?;
+
+    terminated(
+        separated(
+            0..,
+            exp.context(StrContext::Label("argument list"))
+                .context(StrContext::Expected(StrContextValue::Description(
+                    "expression",
+                ))),
+            literal(TokenKind::Comma)
+                .context(StrContext::Label("argument list"))
+                .context(StrContext::Expected(StrContextValue::StringLiteral(","))),
+        ),
+        literal(TokenKind::CloseParen)
+            .context(StrContext::Label("argument list"))
+            .context(StrContext::Expected(StrContextValue::StringLiteral(")"))),
+    )
+    .parse_next(i)
+}
+
+fn block(i: &mut Tokens<'_>) -> ModalResult<Block> {
     literal(TokenKind::OpenBrace)
         .context(StrContext::Label("block"))
         .context(StrContext::Expected(StrContextValue::StringLiteral("{")))
         .parse_next(i)?;
 
-    let (items, _) = repeat_till(0.., block_item, literal(TokenKind::CloseBrace))
+    let (items, _) = repeat_till(0.., cut_err(block_item), literal(TokenKind::CloseBrace))
         .context(StrContext::Label("block"))
         .context(StrContext::Expected(StrContextValue::Description(
             "block item",
@@ -246,7 +289,7 @@ fn block(i: &mut Tokens<'_>) -> winnow::Result<Block> {
     Ok(Block { items })
 }
 
-fn block_item(i: &mut Tokens<'_>) -> winnow::Result<BlockItem> {
+fn block_item(i: &mut Tokens<'_>) -> ModalResult<BlockItem> {
     let first = peek(any)
         .context(StrContext::Label("block_item"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -273,7 +316,7 @@ fn block_item(i: &mut Tokens<'_>) -> winnow::Result<BlockItem> {
     }
 }
 
-fn declaration(i: &mut Tokens<'_>) -> winnow::Result<Declaration> {
+fn declaration(i: &mut Tokens<'_>) -> ModalResult<Declaration> {
     alt((
         variable_declaration.map(Declaration::VarDecl),
         function_declaration.map(Declaration::FunDecl),
@@ -285,7 +328,7 @@ fn declaration(i: &mut Tokens<'_>) -> winnow::Result<Declaration> {
     .parse_next(i)
 }
 
-fn variable_declaration(i: &mut Tokens<'_>) -> winnow::Result<VarDecl> {
+fn variable_declaration(i: &mut Tokens<'_>) -> ModalResult<VarDecl> {
     literal(TokenKind::Keyword(Keyword::Int))
         .context(StrContext::Label("variable declaration"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -330,45 +373,11 @@ fn variable_declaration(i: &mut Tokens<'_>) -> winnow::Result<VarDecl> {
     Ok(VarDecl { name, init })
 }
 
-// fn function_declaration(i: &mut Tokens<'_>) -> winnow::Result<FunDecl> {
-//     literal(TokenKind::Keyword(Keyword::Int))
-//         .context(StrContext::Label("function declaration"))
-//         .context(StrContext::Expected(StrContextValue::Description(
-//             "keyword",
-//         )))
-//         .parse_next(i)?;
-//
-//     let name = identifier
-//         .context(StrContext::Label("function declaration"))
-//         .context(StrContext::Expected(StrContextValue::Description(
-//             "identifier",
-//         )))
-//         .parse_next(i)?;
-//
-//     literal(TokenKind::OpenParen)
-//         .context(StrContext::Label("function declaration"))
-//         .context(StrContext::Expected(StrContextValue::Description("(")))
-//         .parse_next(i)?;
-//
-//     // TODO parameter list
-//     let params = vec![];
-//
-//     literal(TokenKind::CloseParen)
-//         .context(StrContext::Label("function declaration"))
-//         .context(StrContext::Expected(StrContextValue::Description(")")))
-//         .parse_next(i)?;
-//
-//     // TODO: Body or semicolon
-//     let body = None;
-//
-//     Ok(FunDecl { name, params, body })
-// }
-
-fn statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+fn statement(i: &mut Tokens<'_>) -> ModalResult<Statement> {
     alt((labeled_statement, statement2)).parse_next(i)
 }
 
-fn labeled_statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+fn labeled_statement(i: &mut Tokens<'_>) -> ModalResult<Statement> {
     let label = identifier
         .context(StrContext::Label("labeled statement"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -394,7 +403,7 @@ fn labeled_statement(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     })
 }
 
-fn statement2(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+fn statement2(i: &mut Tokens<'_>) -> ModalResult<Statement> {
     dispatch! { peek(any);
         &Token { kind: TokenKind::Keyword(Keyword::Return), .. } => {
             statement_return
@@ -437,7 +446,7 @@ fn statement2(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     .parse_next(i)
 }
 
-fn statement_return(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+fn statement_return(i: &mut Tokens<'_>) -> ModalResult<Statement> {
     literal(TokenKind::Keyword(Keyword::Return))
         .context(StrContext::Label("return statement"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -459,7 +468,7 @@ fn statement_return(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     Ok(Statement::Return(exp))
 }
 
-fn statement_if(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+fn statement_if(i: &mut Tokens<'_>) -> ModalResult<Statement> {
     literal(TokenKind::Keyword(Keyword::If))
         .context(StrContext::Label("if statement"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -518,7 +527,7 @@ fn statement_if(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     })
 }
 
-fn statement_goto(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+fn statement_goto(i: &mut Tokens<'_>) -> ModalResult<Statement> {
     literal(TokenKind::Keyword(Keyword::Goto))
         .context(StrContext::Label("goto statement"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -540,7 +549,7 @@ fn statement_goto(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     Ok(Statement::Goto(label))
 }
 
-fn statement_break(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+fn statement_break(i: &mut Tokens<'_>) -> ModalResult<Statement> {
     literal(TokenKind::Keyword(Keyword::Break))
         .context(StrContext::Label("break statement"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -558,7 +567,7 @@ fn statement_break(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     Ok(Statement::Break(None))
 }
 
-fn statement_continue(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+fn statement_continue(i: &mut Tokens<'_>) -> ModalResult<Statement> {
     literal(TokenKind::Keyword(Keyword::Continue))
         .context(StrContext::Label("continue statement"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -576,7 +585,7 @@ fn statement_continue(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     Ok(Statement::Continue(None))
 }
 
-fn statement_while(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+fn statement_while(i: &mut Tokens<'_>) -> ModalResult<Statement> {
     literal(TokenKind::Keyword(Keyword::While))
         .context(StrContext::Label("while statement"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -614,7 +623,7 @@ fn statement_while(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     })
 }
 
-fn statement_do_while(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+fn statement_do_while(i: &mut Tokens<'_>) -> ModalResult<Statement> {
     literal(TokenKind::Keyword(Keyword::Do))
         .context(StrContext::Label("do-while statement"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -664,7 +673,7 @@ fn statement_do_while(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     })
 }
 
-fn statement_for(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
+fn statement_for(i: &mut Tokens<'_>) -> ModalResult<Statement> {
     literal(TokenKind::Keyword(Keyword::For))
         .context(StrContext::Label("for statement"))
         .context(StrContext::Expected(StrContextValue::Description(
@@ -730,7 +739,7 @@ fn statement_for(i: &mut Tokens<'_>) -> winnow::Result<Statement> {
     })
 }
 
-fn for_init(i: &mut Tokens<'_>) -> winnow::Result<ForInit> {
+fn for_init(i: &mut Tokens<'_>) -> ModalResult<ForInit> {
     // FIXME: this might be wrong? Needs to handle the FunDecl case properly.
     // TODO: write a test to verify this works correctly.
     alt((
@@ -753,7 +762,7 @@ fn for_init(i: &mut Tokens<'_>) -> winnow::Result<ForInit> {
 }
 
 /// Parses an expression with operator precedence, using Precedence Climbing.
-fn exp_internal(i: &mut Tokens<'_>, min_prec: usize) -> winnow::Result<Expression> {
+fn exp_internal(i: &mut Tokens<'_>, min_prec: usize) -> ModalResult<Expression> {
     trace("exp_internal", |i: &mut Tokens<'_>| {
         let mut left = factor.parse_next(i)?;
 
@@ -788,24 +797,26 @@ fn exp_internal(i: &mut Tokens<'_>, min_prec: usize) -> winnow::Result<Expressio
     .parse_next(i)
 }
 
-fn exp(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
+fn exp(i: &mut Tokens<'_>) -> ModalResult<Expression> {
     exp_internal(i, 0)
 }
 
-fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
+fn factor(i: &mut Tokens<'_>) -> ModalResult<Expression> {
     trace("factor", |i: &mut _| {
         let next_token: &Token = peek(any).parse_next(i)?;
-        let exp = match next_token.kind {
+        let exp = match &next_token.kind {
             TokenKind::Constant(_) => Expression::Constant(int.parse_next(i)?),
-            TokenKind::Identifier(_) => {
+            TokenKind::Identifier(identifier) => {
+                take(1usize).parse_next(i)?;
+
                 // Variable or function call?
                 let next_token: &Token = peek(any).parse_next(i)?;
                 match next_token.kind {
                     TokenKind::OpenParen => {
-                        let arguments = vec![]; //TODO
-                        Expression::FunctionCall(identifier.parse_next(i)?, arguments)
+                        let arguments = argument_list.parse_next(i)?;
+                        Expression::FunctionCall(identifier.clone(), arguments)
                     }
-                    _ => Expression::Var(identifier.parse_next(i)?),
+                    _ => Expression::Var(identifier.clone()),
                 }
             }
             TokenKind::BitwiseComplement | TokenKind::Negation | TokenKind::LogicalNot => {
@@ -827,7 +838,7 @@ fn factor(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
     .parse_next(i)
 }
 
-fn conditional_middle(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
+fn conditional_middle(i: &mut Tokens<'_>) -> ModalResult<Expression> {
     literal(TokenKind::QuestionMark)
         .context(StrContext::Label("conditional"))
         .context(StrContext::Expected(StrContextValue::Description("?")))
@@ -845,7 +856,7 @@ fn conditional_middle(i: &mut Tokens<'_>) -> winnow::Result<Expression> {
     Ok(exp)
 }
 
-fn identifier(i: &mut Tokens<'_>) -> winnow::Result<String> {
+fn identifier(i: &mut Tokens<'_>) -> ModalResult<Identifier> {
     let identifier = any
         .try_map(|t: &Token| {
             if let TokenKind::Identifier(ref id) = t.kind {
@@ -864,7 +875,7 @@ fn identifier(i: &mut Tokens<'_>) -> winnow::Result<String> {
     Ok(identifier)
 }
 
-fn int(i: &mut Tokens<'_>) -> winnow::Result<usize> {
+fn int(i: &mut Tokens<'_>) -> ModalResult<usize> {
     let constant = any
         .try_map(|t: &Token| {
             if let TokenKind::Constant(c) = t.kind {
@@ -883,7 +894,7 @@ fn int(i: &mut Tokens<'_>) -> winnow::Result<usize> {
     Ok(constant)
 }
 
-fn unop(i: &mut Tokens<'_>) -> winnow::Result<UnaryOperator> {
+fn unop(i: &mut Tokens<'_>) -> ModalResult<UnaryOperator> {
     let op = any
         .try_map(|t: &Token| match t.kind {
             TokenKind::BitwiseComplement => Ok(UnaryOperator::Complement),
@@ -901,7 +912,7 @@ fn unop(i: &mut Tokens<'_>) -> winnow::Result<UnaryOperator> {
     Ok(op)
 }
 
-fn binop(i: &mut Tokens<'_>) -> winnow::Result<BinaryOperator> {
+fn binop(i: &mut Tokens<'_>) -> ModalResult<BinaryOperator> {
     let op = any
         .try_map(|t: &Token| match t.kind {
             TokenKind::Add => Ok(BinaryOperator::Add),
@@ -1186,7 +1197,7 @@ mod tests {
             Program {
                 function_declarations: vec![FunDecl {
                     name: "main".into(),
-                    params: vec!["void".into()],
+                    params: vec![],
                     body: Some(Block {
                         items: vec![
                             BlockItem::D(Declaration::VarDecl(VarDecl {
@@ -1381,7 +1392,7 @@ mod tests {
             ast,
             FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![
                         BlockItem::S(Statement::Goto("label1".into())),
@@ -1417,7 +1428,7 @@ mod tests {
             ast,
             FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![
                         BlockItem::S(Statement::Goto("labelB".into())),
@@ -1453,7 +1464,7 @@ mod tests {
             ast,
             FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![
                         BlockItem::S(Statement::If {
@@ -1495,7 +1506,7 @@ mod tests {
             ast,
             FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![
                         BlockItem::D(Declaration::VarDecl(VarDecl {
@@ -1558,7 +1569,7 @@ mod tests {
             ast,
             FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![BlockItem::S(Statement::While {
                         condition: Expression::Constant(1),
@@ -1594,7 +1605,7 @@ mod tests {
             ast,
             FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![BlockItem::S(Statement::DoWhile {
                         body: Box::new(Statement::Compound(Block {
@@ -1628,7 +1639,7 @@ mod tests {
             ast,
             FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![BlockItem::S(Statement::For {
                         init: ForInit::InitDecl(VarDecl {
@@ -1767,13 +1778,62 @@ mod tests {
     }
 
     #[test]
+    fn test_parameter_list() {
+        fn parse(input: &str) -> Vec<Identifier> {
+            let tokens = lex(input).unwrap();
+            let tokens = Tokens::new(&tokens);
+            let result = parameter_list.parse(tokens);
+            result.expect("program should parse")
+        }
+
+        assert!(parse("(void)").is_empty());
+        assert_eq!(parse("(int x)"), vec!["x".to_string()]);
+        assert_eq!(
+            parse("(int x, int y)"),
+            vec!["x".to_string(), "y".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_argument_list() {
+        fn parse(input: &str) -> Vec<Expression> {
+            let tokens = lex(input).unwrap();
+            let tokens = Tokens::new(&tokens);
+            let result = argument_list.parse(tokens);
+            result.expect("program should parse")
+        }
+
+        assert!(parse("()").is_empty());
+        assert_eq!(parse("(x)"), vec![Expression::Var("x".to_string())]);
+        assert_eq!(
+            parse("(1, y + 2)"),
+            vec![
+                Expression::Constant(1),
+                Expression::Binary(
+                    BinaryOperator::Add,
+                    Box::new(Expression::Var("y".to_string())),
+                    Box::new(Expression::Constant(2))
+                )
+            ]
+        );
+    }
+    #[test]
     fn test_function_declaration() {
         let input = r#"
             int main(void);
         "#;
         let ast = parse_program(input);
 
-        assert!(false);
+        assert_eq!(
+            ast,
+            Program {
+                function_declarations: vec![FunDecl {
+                    name: "main".into(),
+                    params: vec![],
+                    body: None
+                }]
+            }
+        )
     }
 
     #[test]
@@ -1785,19 +1845,78 @@ mod tests {
         "#;
         let ast = parse_program(input);
 
-        assert!(false);
+        assert_eq!(
+            ast,
+            Program {
+                function_declarations: vec![
+                    FunDecl {
+                        name: "main".into(),
+                        params: vec![],
+                        body: Some(Block {
+                            items: vec![BlockItem::S(Statement::Return(Expression::Constant(1)))]
+                        }),
+                    },
+                    FunDecl {
+                        name: "foo".into(),
+                        params: vec!["x".into()],
+                        body: Some(Block {
+                            items: vec![BlockItem::S(Statement::Return(Expression::Var(
+                                "x".into()
+                            )))]
+                        }),
+                    },
+                    FunDecl {
+                        name: "bar".into(),
+                        params: vec!["x".into(), "y".into()],
+                        body: Some(Block {
+                            items: vec![BlockItem::S(Statement::Return(Expression::Binary(
+                                BinaryOperator::Add,
+                                Box::new(Expression::Var("x".into())),
+                                Box::new(Expression::Var("y".into()))
+                            )))]
+                        }),
+                    }
+                ]
+            }
+        )
     }
 
     #[test]
     fn test_function_declaration_in_function() {
         let input = r#"
             int main(void) {
-                int helper(int x);
+                int x;
+                int helper(int y);
                 return helper(42);
             }
         "#;
         let ast = parse_program(input);
 
-        assert!(false);
+        assert_eq!(
+            ast,
+            Program {
+                function_declarations: vec![FunDecl {
+                    name: "main".into(),
+                    params: vec![],
+                    body: Some(Block {
+                        items: vec![
+                            BlockItem::D(Declaration::VarDecl(VarDecl {
+                                name: "x".into(),
+                                init: None,
+                            })),
+                            BlockItem::D(Declaration::FunDecl(FunDecl {
+                                name: "helper".into(),
+                                params: vec!["y".into()],
+                                body: None,
+                            })),
+                            BlockItem::S(Statement::Return(Expression::FunctionCall(
+                                "helper".into(),
+                                vec![Expression::Constant(42)],
+                            ))),
+                        ]
+                    }),
+                }]
+            }
+        )
     }
 }

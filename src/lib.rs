@@ -171,7 +171,7 @@ mod tests {
             Program {
                 function_declarations: vec![FunDecl {
                     name: "main".into(),
-                    params: vec!["void".into()],
+                    params: vec![],
                     body: Some(Block {
                         items: vec![BlockItem::S(Statement::Return(Expression::Constant(2)))]
                     }),
@@ -205,6 +205,22 @@ mod tests {
                 found,
                 offset
             }) if expected == "keyword" && found == "EOF" && offset == 9
+        );
+    }
+
+    #[test]
+    fn test_parse_error_function_no_parameters() {
+        // This is legal C99, but we don't support it yet, as it means an
+        // unspecified number of parameters.
+        let input = r#"int main() { }"#;
+        assert_matches!(
+            lex_and_parse(input).unwrap_err(),
+            Error::Parser(ParserError {
+                message: _,
+                expected,
+                found,
+                offset
+            }) if expected == "keyword" && found == "CloseParen" && offset == 9
         );
     }
 
@@ -287,7 +303,6 @@ mod tests {
         int main(void) {
             return --2;
         }"#;
-        let x = lex_and_parse(input);
         assert_matches!(
             lex_and_parse(input).unwrap_err(),
             Error::Parser(ParserError {
