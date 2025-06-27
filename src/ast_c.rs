@@ -34,6 +34,7 @@
 //!                   | LessOrEqual | GreaterOrEqual
 
 use crate::lexer::Identifier;
+pub(crate) type Label = String;
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Program {
@@ -80,29 +81,29 @@ pub(crate) enum Statement {
         else_: Option<Box<Statement>>,
     },
     Labeled {
-        label: Identifier,
+        label: Label,
         statement: Box<Statement>,
     },
-    Goto(Identifier),
+    Goto(Label),
     Compound(Block),
-    Break(Option<Identifier>),
-    Continue(Option<Identifier>),
+    Break(Option<Label>),
+    Continue(Option<Label>),
     While {
         condition: Expression,
         body: Box<Statement>,
-        loop_label: Option<Identifier>,
+        loop_label: Option<Label>,
     },
     DoWhile {
         body: Box<Statement>,
         condition: Expression,
-        loop_label: Option<Identifier>,
+        loop_label: Option<Label>,
     },
     For {
         init: ForInit,
         condition: Option<Expression>,
         post: Option<Expression>,
         body: Box<Statement>,
-        loop_label: Option<Identifier>,
+        loop_label: Option<Label>,
     },
     Null,
 }

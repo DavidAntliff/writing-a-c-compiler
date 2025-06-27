@@ -1,26 +1,27 @@
 use crate::ast_c::{
-    Block, BlockItem, Declaration, Expression, ForInit, FunDecl, Program, Statement, VarDecl,
+    Block, BlockItem, Declaration, Expression, ForInit, FunDecl, Label, Program, Statement, VarDecl,
 };
 use crate::id_gen::IdGenerator;
+use crate::lexer::Identifier;
 use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Debug, PartialEq, Error)]
 pub enum Error {
     #[error("Undeclared variable: {0}")]
-    UndeclaredVariable(String),
+    UndeclaredVariable(Identifier),
 
     #[error("Duplicate variable declaration: {0}")]
-    DuplicateVariableDeclaration(String),
+    DuplicateVariableDeclaration(Identifier),
 
     #[error("Invalid lvalue")]
     InvalidLValue,
 
     #[error("Undeclared label: {0}")]
-    UndeclaredLabel(String),
+    UndeclaredLabel(Label),
 
     #[error("Duplicate label: {0}")]
-    DuplicateLabel(String),
+    DuplicateLabel(Label),
 
     #[error("Break statement outside of loop")]
     BreakOutsideLoop,
@@ -28,12 +29,30 @@ pub enum Error {
     #[error("Continue statement outside of loop")]
     ContinueOutsideLoop,
 
+    #[error("Invalid function definition: {0}")]
+    InvalidFunctionDefinition(Identifier),
+
+    #[error("Undeclared function: {0}")]
+    UndeclaredFunction(Identifier),
+
+    #[error("Duplicate function parameter: {0}")]
+    DuplicateFunctionParameter(Identifier),
+
+    #[error("Duplicate function declaration: {0}")]
+    DuplicateFunctionDeclaration(Identifier),
+
+    #[error("Mismatched function declaration: {0}")]
+    MismatchedFunctionDeclaration(Identifier),
+
+    #[error("Multiple function definitions: {0}")]
+    MultipleDefinitions(Identifier),
+
     #[error("{0}")]
     Message(String),
 }
 
 pub(crate) fn analyse(program: &mut Program) -> Result<(), Error> {
-    variable_resolution(program)?;
+    identifier_resolution(program)?;
 
     loop_labeling(program)?;
 
@@ -44,16 +63,23 @@ pub(crate) fn analyse(program: &mut Program) -> Result<(), Error> {
     Ok(())
 }
 
-fn variable_resolution(program: &mut Program) -> Result<(), Error> {
-    let mut variable_map = HashMap::<String, MapEntry>::new();
+#[derive(Debug, Clone)]
+struct IdentifierMapEntry {
+    unique_name: Identifier,
+    from_current_scope: bool,
+    has_linkage: bool,
+}
+
+type IdentifierMap = HashMap<Identifier, IdentifierMapEntry>;
+
+fn identifier_resolution(program: &mut Program) -> Result<(), Error> {
+    let mut identifier_map = IdentifierMap::new();
     let mut id_gen = IdGenerator::new();
 
     // TODO: for globals
 
     for function in &mut program.function_declarations {
-        if let Some(body) = &mut function.body {
-            *body = resolve_block(body, &mut variable_map, &mut id_gen)?;
-        }
+        *function = resolve_function_declaration(function, &mut identifier_map, &mut id_gen)?;
     }
 
     Ok(())
@@ -63,15 +89,9 @@ fn unique_name(source_name: &str, id_gen: &mut IdGenerator) -> String {
     format!("{source_name}.{}", id_gen.next())
 }
 
-#[derive(Debug, Clone)]
-struct MapEntry {
-    unique_name: String,
-    from_current_block: bool,
-}
-
 fn resolve_block(
     block: &Block,
-    variable_map: &mut HashMap<String, MapEntry>,
+    identifier_map: &mut IdentifierMap,
     id_gen: &mut IdGenerator,
 ) -> Result<Block, Error> {
     let mut items = Vec::new();
@@ -80,14 +100,14 @@ fn resolve_block(
             BlockItem::S(statement) => {
                 items.push(BlockItem::S(resolve_statement(
                     statement,
-                    variable_map,
+                    identifier_map,
                     id_gen,
                 )?));
             }
             BlockItem::D(declaration) => {
                 items.push(BlockItem::D(resolve_declaration(
                     declaration,
-                    variable_map,
+                    identifier_map,
                     id_gen,
                 )?));
             }
@@ -98,16 +118,24 @@ fn resolve_block(
 
 fn resolve_declaration(
     declaration: &Declaration,
-    variable_map: &mut HashMap<String, MapEntry>,
+    identifier_map: &mut IdentifierMap,
     id_gen: &mut IdGenerator,
 ) -> Result<Declaration, Error> {
     match declaration {
-        Declaration::FunDecl(_) => {
-            todo!()
+        Declaration::FunDecl(fun_decl) => {
+            if fun_decl.body.is_some() {
+                Err(Error::InvalidFunctionDefinition(fun_decl.name.clone()))
+            } else {
+                Ok(Declaration::FunDecl(resolve_function_declaration(
+                    fun_decl,
+                    identifier_map,
+                    id_gen,
+                )?))
+            }
         }
         Declaration::VarDecl(var_decl) => Ok(Declaration::VarDecl(resolve_variable_declaration(
             var_decl,
-            variable_map,
+            identifier_map,
             id_gen,
         )?)),
     }
@@ -115,24 +143,25 @@ fn resolve_declaration(
 
 fn resolve_variable_declaration(
     VarDecl { name, init }: &VarDecl,
-    variable_map: &mut HashMap<String, MapEntry>,
+    identifier_map: &mut IdentifierMap,
     id_gen: &mut IdGenerator,
 ) -> Result<VarDecl, Error> {
-    if variable_map.contains_key(name) && variable_map[name].from_current_block {
+    if identifier_map.contains_key(name) && identifier_map[name].from_current_scope {
         return Err(Error::DuplicateVariableDeclaration(name.clone()));
     }
 
     let unique_name = unique_name(name, id_gen);
-    variable_map.insert(
+    identifier_map.insert(
         name.clone(),
-        MapEntry {
+        IdentifierMapEntry {
             unique_name: unique_name.clone(),
-            from_current_block: true,
+            from_current_scope: true,
+            has_linkage: false, // local variables do not have linkage
         },
     );
 
     let init = if let Some(init) = init {
-        Some(resolve_exp(init, variable_map)?)
+        Some(resolve_exp(init, identifier_map)?)
     } else {
         None
     };
@@ -143,14 +172,76 @@ fn resolve_variable_declaration(
     })
 }
 
+fn resolve_function_declaration(
+    FunDecl { name, params, body }: &FunDecl,
+    identifier_map: &mut IdentifierMap,
+    id_gen: &mut IdGenerator,
+) -> Result<FunDecl, Error> {
+    if identifier_map.contains_key(name) {
+        let prev_entry = &identifier_map.get(name).unwrap();
+        if prev_entry.from_current_scope && !prev_entry.has_linkage {
+            return Err(Error::DuplicateFunctionDeclaration(name.clone()));
+        }
+    }
+
+    identifier_map.insert(
+        name.clone(),
+        IdentifierMapEntry {
+            unique_name: name.clone(),
+            from_current_scope: true,
+            has_linkage: true,
+        },
+    );
+
+    let mut inner_map = copy_identifier_map(identifier_map);
+    let new_params = params
+        .iter()
+        .map(|param| resolve_param(param, &mut inner_map, id_gen))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let new_body = if let Some(body) = body {
+        Some(resolve_block(body, &mut inner_map, id_gen)?)
+    } else {
+        None
+    };
+
+    Ok(FunDecl {
+        name: name.clone(),
+        params: new_params,
+        body: new_body,
+    })
+}
+
+fn resolve_param(
+    name: &Identifier,
+    identifier_map: &mut IdentifierMap,
+    id_gen: &mut IdGenerator,
+) -> Result<Identifier, Error> {
+    if identifier_map.contains_key(name) && identifier_map[name].from_current_scope {
+        return Err(Error::DuplicateFunctionParameter(name.clone()));
+    }
+
+    let unique_name = unique_name(name, id_gen);
+    identifier_map.insert(
+        name.clone(),
+        IdentifierMapEntry {
+            unique_name: unique_name.clone(),
+            from_current_scope: true,
+            has_linkage: false, // parameters do not have linkage
+        },
+    );
+
+    Ok(unique_name)
+}
+
 fn resolve_statement(
     statement: &Statement,
-    variable_map: &mut HashMap<String, MapEntry>,
+    identifier_map: &mut IdentifierMap,
     id_gen: &mut IdGenerator,
 ) -> Result<Statement, Error> {
     match statement {
-        Statement::Return(exp) => Ok(Statement::Return(resolve_exp(exp, variable_map)?)),
-        Statement::Expression(exp) => Ok(Statement::Expression(resolve_exp(exp, variable_map)?)),
+        Statement::Return(exp) => Ok(Statement::Return(resolve_exp(exp, identifier_map)?)),
+        Statement::Expression(exp) => Ok(Statement::Expression(resolve_exp(exp, identifier_map)?)),
         Statement::If {
             condition,
             then,
@@ -159,30 +250,30 @@ fn resolve_statement(
             let else_ = if let Some(else_stmt) = else_ {
                 Some(Box::new(resolve_statement(
                     else_stmt,
-                    variable_map,
+                    identifier_map,
                     id_gen,
                 )?))
             } else {
                 None
             };
             Ok(Statement::If {
-                condition: resolve_exp(condition, variable_map)?,
-                then: Box::new(resolve_statement(then, variable_map, id_gen)?),
+                condition: resolve_exp(condition, identifier_map)?,
+                then: Box::new(resolve_statement(then, identifier_map, id_gen)?),
                 else_,
             })
         }
         Statement::Labeled { label, statement } => {
-            resolve_statement(statement, variable_map, id_gen).map(|stmt| Statement::Labeled {
+            resolve_statement(statement, identifier_map, id_gen).map(|stmt| Statement::Labeled {
                 label: label.clone(),
                 statement: Box::new(stmt),
             })
         }
-        Statement::Goto(identifier) => Ok(Statement::Goto(identifier.clone())),
+        Statement::Goto(label) => Ok(Statement::Goto(label.clone())),
         Statement::Compound(block) => {
-            let mut new_variable_map = copy_variable_map(variable_map);
+            let mut new_identifier_map = copy_identifier_map(identifier_map);
             Ok(Statement::Compound(resolve_block(
                 block,
-                &mut new_variable_map,
+                &mut new_identifier_map,
                 id_gen,
             )?))
         }
@@ -193,8 +284,8 @@ fn resolve_statement(
             body,
             loop_label,
         } => Ok(Statement::While {
-            condition: resolve_exp(condition, variable_map)?,
-            body: Box::new(resolve_statement(body, variable_map, id_gen)?),
+            condition: resolve_exp(condition, identifier_map)?,
+            body: Box::new(resolve_statement(body, identifier_map, id_gen)?),
             loop_label: loop_label.clone(),
         }),
         Statement::DoWhile {
@@ -202,8 +293,8 @@ fn resolve_statement(
             condition,
             loop_label,
         } => Ok(Statement::DoWhile {
-            body: Box::new(resolve_statement(body, variable_map, id_gen)?),
-            condition: resolve_exp(condition, variable_map)?,
+            body: Box::new(resolve_statement(body, identifier_map, id_gen)?),
+            condition: resolve_exp(condition, identifier_map)?,
             loop_label: loop_label.clone(),
         }),
         Statement::For {
@@ -213,11 +304,11 @@ fn resolve_statement(
             body,
             loop_label,
         } => {
-            let mut new_variable_map = copy_variable_map(variable_map);
-            let init = resolve_for_init(init, &mut new_variable_map, id_gen)?;
-            let condition = resolve_optional_exp(condition, &mut new_variable_map)?;
-            let post = resolve_optional_exp(post, &mut new_variable_map)?;
-            let body = resolve_statement(body, &mut new_variable_map, id_gen)?;
+            let mut new_identifier_map = copy_identifier_map(identifier_map);
+            let init = resolve_for_init(init, &mut new_identifier_map, id_gen)?;
+            let condition = resolve_optional_exp(condition, &mut new_identifier_map)?;
+            let post = resolve_optional_exp(post, &mut new_identifier_map)?;
+            let body = resolve_statement(body, &mut new_identifier_map, id_gen)?;
             Ok(Statement::For {
                 init,
                 condition,
@@ -230,101 +321,102 @@ fn resolve_statement(
     }
 }
 
-fn copy_variable_map(variable_map: &HashMap<String, MapEntry>) -> HashMap<String, MapEntry> {
+fn copy_identifier_map(identifier_map: &IdentifierMap) -> IdentifierMap {
     // clone the hashmap but reset the `from_current_block` flag
-    variable_map
+    identifier_map
         .iter()
         .map(|(k, v)| {
             (
                 k.clone(),
-                MapEntry {
+                IdentifierMapEntry {
                     unique_name: v.unique_name.clone(),
-                    from_current_block: false,
+                    from_current_scope: false,
+                    has_linkage: v.has_linkage,
                 },
             )
         })
         .collect()
 }
 
-fn resolve_exp(
-    exp: &Expression,
-    variable_map: &mut HashMap<String, MapEntry>,
-) -> Result<Expression, Error> {
+fn resolve_exp(exp: &Expression, identifier_map: &mut IdentifierMap) -> Result<Expression, Error> {
     match exp {
         Expression::Constant(_) => Ok(exp.clone()),
-        Expression::Var(v) => {
-            if variable_map.contains_key(v) {
-                Ok(Expression::Var(
-                    variable_map.get(v).unwrap().unique_name.clone(),
-                ))
-            } else {
-                Err(Error::UndeclaredVariable(v.clone()))
-            }
-        }
+        Expression::Var(v) => identifier_map
+            .get(v)
+            .map(|var| Expression::Var(var.unique_name.clone()))
+            .ok_or_else(|| Error::UndeclaredVariable(v.clone()))
+            .map(Ok)?,
         Expression::Unary(op, exp) => Ok(Expression::Unary(
             op.clone(),
-            resolve_exp(exp, variable_map)?.into(),
+            resolve_exp(exp, identifier_map)?.into(),
         )),
         Expression::Binary(op, left, right) => Ok(Expression::Binary(
             op.clone(),
-            resolve_exp(left, variable_map)?.into(),
-            resolve_exp(right, variable_map)?.into(),
+            resolve_exp(left, identifier_map)?.into(),
+            resolve_exp(right, identifier_map)?.into(),
         )),
         Expression::Assignment(left, right) => {
             if !matches!(**left, Expression::Var(_)) {
                 return Err(Error::InvalidLValue);
             }
             Ok(Expression::Assignment(
-                resolve_exp(left, variable_map)?.into(),
-                resolve_exp(right, variable_map)?.into(),
+                resolve_exp(left, identifier_map)?.into(),
+                resolve_exp(right, identifier_map)?.into(),
             ))
         }
         Expression::Conditional(cond, then, else_) => Ok(Expression::Conditional(
-            resolve_exp(cond, variable_map)?.into(),
-            resolve_exp(then, variable_map)?.into(),
-            resolve_exp(else_, variable_map)?.into(),
+            resolve_exp(cond, identifier_map)?.into(),
+            resolve_exp(then, identifier_map)?.into(),
+            resolve_exp(else_, identifier_map)?.into(),
         )),
-        Expression::FunctionCall(..) => {
-            todo!()
-        }
+        Expression::FunctionCall(fun_name, args) => identifier_map
+            .get(fun_name)
+            .map(|var| var.unique_name.clone())
+            .ok_or_else(|| Error::UndeclaredFunction(fun_name.clone()))
+            .and_then(|unique_name| {
+                args.iter()
+                    .map(|arg| resolve_exp(arg, identifier_map))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(|resolved_args| Expression::FunctionCall(unique_name, resolved_args))
+            }),
     }
 }
 
 fn resolve_for_init(
     init: &ForInit,
-    variable_map: &mut HashMap<String, MapEntry>,
+    identifier_map: &mut IdentifierMap,
     id_gen: &mut IdGenerator,
 ) -> Result<ForInit, Error> {
     match init {
         ForInit::InitDecl(decl) => Ok(ForInit::InitDecl(resolve_variable_declaration(
             decl,
-            variable_map,
+            identifier_map,
             id_gen,
         )?)),
-        ForInit::InitExp(exp) => Ok(ForInit::InitExp(resolve_optional_exp(exp, variable_map)?)),
+        ForInit::InitExp(exp) => Ok(ForInit::InitExp(resolve_optional_exp(exp, identifier_map)?)),
     }
 }
 
 fn resolve_optional_exp(
     exp: &Option<Expression>,
-    variable_map: &mut HashMap<String, MapEntry>,
+    identifier_map: &mut IdentifierMap,
 ) -> Result<Option<Expression>, Error> {
     if let Some(exp) = exp {
-        Ok(Some(resolve_exp(exp, variable_map)?))
+        Ok(Some(resolve_exp(exp, identifier_map)?))
     } else {
         Ok(None)
     }
 }
 
 fn loop_labeling(program: &mut Program) -> Result<(), Error> {
-    let mut variable_map = HashMap::<String, MapEntry>::new();
+    let mut identifier_map = IdentifierMap::new();
     let mut id_gen = IdGenerator::new();
 
     // TODO: for globals
 
     for function in &mut program.function_declarations {
         if let Some(body) = &mut function.body {
-            *body = loop_label_block(body, &mut variable_map, &mut id_gen)?;
+            *body = loop_label_block(body, &mut identifier_map, &mut id_gen)?;
         }
     }
 
@@ -333,7 +425,7 @@ fn loop_labeling(program: &mut Program) -> Result<(), Error> {
 
 fn loop_label_block(
     block: &Block,
-    variable_map: &mut HashMap<String, MapEntry>,
+    identifier_map: &mut IdentifierMap,
     id_gen: &mut IdGenerator,
 ) -> Result<Block, Error> {
     let mut items = Vec::new();
@@ -343,7 +435,7 @@ fn loop_label_block(
                 items.push(BlockItem::S(loop_label_statement(
                     statement,
                     None,
-                    variable_map,
+                    identifier_map,
                     id_gen,
                 )?));
             }
@@ -357,8 +449,8 @@ fn loop_label_block(
 
 fn loop_label_statement(
     statement: &Statement,
-    current_label: Option<String>,
-    variable_map: &mut HashMap<String, MapEntry>,
+    current_label: Option<Label>,
+    identifier_map: &mut IdentifierMap,
     id_gen: &mut IdGenerator,
 ) -> Result<Statement, Error> {
     match statement {
@@ -371,14 +463,14 @@ fn loop_label_statement(
             then: Box::new(loop_label_statement(
                 then,
                 current_label.clone(),
-                variable_map,
+                identifier_map,
                 id_gen,
             )?),
             else_: if let Some(else_stmt) = else_ {
                 Some(Box::new(loop_label_statement(
                     else_stmt,
                     current_label.clone(),
-                    variable_map,
+                    identifier_map,
                     id_gen,
                 )?))
             } else {
@@ -390,7 +482,7 @@ fn loop_label_statement(
             statement: Box::new(loop_label_statement(
                 statement,
                 current_label.clone(),
-                variable_map,
+                identifier_map,
                 id_gen,
             )?),
         }),
@@ -402,7 +494,7 @@ fn loop_label_statement(
                         let labeled_statement = loop_label_statement(
                             statement,
                             current_label.clone(),
-                            variable_map,
+                            identifier_map,
                             id_gen,
                         )?;
                         items.push(BlockItem::S(labeled_statement));
@@ -435,7 +527,7 @@ fn loop_label_statement(
         } => {
             let loop_label = Some(unique_name("while", id_gen));
             let labeled_body =
-                loop_label_statement(body, loop_label.clone(), variable_map, id_gen)?;
+                loop_label_statement(body, loop_label.clone(), identifier_map, id_gen)?;
             Ok(Statement::While {
                 condition: condition.clone(),
                 body: Box::new(labeled_body),
@@ -449,7 +541,7 @@ fn loop_label_statement(
         } => {
             let loop_label = Some(unique_name("do_while", id_gen));
             let labeled_body =
-                loop_label_statement(body, loop_label.clone(), variable_map, id_gen)?;
+                loop_label_statement(body, loop_label.clone(), identifier_map, id_gen)?;
             Ok(Statement::DoWhile {
                 body: Box::new(labeled_body),
                 condition: condition.clone(),
@@ -465,7 +557,7 @@ fn loop_label_statement(
         } => {
             let loop_label = Some(unique_name("for", id_gen));
             let labeled_body =
-                loop_label_statement(body, loop_label.clone(), variable_map, id_gen)?;
+                loop_label_statement(body, loop_label.clone(), identifier_map, id_gen)?;
             Ok(Statement::For {
                 init: init.clone(),
                 condition: condition.clone(),
@@ -482,8 +574,10 @@ fn loop_label_statement(
 
 // GOTO labels:
 
+type LabelMap = HashMap<Label, usize>;
+
 fn goto_label_resolution(function_decl: &FunDecl) -> Result<(), Error> {
-    let mut labels = HashMap::<String, usize>::new();
+    let mut labels = LabelMap::new();
 
     if let Some(body) = &function_decl.body {
         // AST is a tree, so we need to traverse it recursively,
@@ -508,10 +602,7 @@ fn goto_label_resolution(function_decl: &FunDecl) -> Result<(), Error> {
     Ok(())
 }
 
-fn extend_goto_labels(
-    labels: &mut HashMap<String, usize>,
-    new_labels: &HashMap<String, usize>,
-) -> Result<(), Error> {
+fn extend_goto_labels(labels: &mut LabelMap, new_labels: &LabelMap) -> Result<(), Error> {
     for label in new_labels.keys() {
         if labels.contains_key(label) {
             return Err(Error::DuplicateLabel(label.clone()));
@@ -521,7 +612,7 @@ fn extend_goto_labels(
     Ok(())
 }
 
-fn nested_goto_labels(statement: &Statement) -> Result<HashMap<String, usize>, Error> {
+fn nested_goto_labels(statement: &Statement) -> Result<LabelMap, Error> {
     let mut labels = HashMap::new();
     match statement {
         Statement::Labeled { label, statement } => {
@@ -583,7 +674,7 @@ mod tests {
         let mut program = Program {
             function_declarations: vec![FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![
                         BlockItem::D(Declaration::VarDecl(VarDecl {
@@ -596,7 +687,7 @@ mod tests {
             }],
         };
 
-        assert!(variable_resolution(&mut program).is_ok());
+        assert!(identifier_resolution(&mut program).is_ok());
 
         assert_eq!(
             program.function_declarations[0].body,
@@ -619,7 +710,7 @@ mod tests {
         let mut program = Program {
             function_declarations: vec![FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![
                         BlockItem::S(Statement::Goto("label1".into())),
@@ -642,7 +733,7 @@ mod tests {
         let mut program = Program {
             function_declarations: vec![FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![
                         BlockItem::S(Statement::Goto("label1".into())),
@@ -669,7 +760,7 @@ mod tests {
         let mut program = Program {
             function_declarations: vec![FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![
                         BlockItem::S(Statement::Goto("label1".into())),
@@ -705,7 +796,7 @@ mod tests {
         let mut program = Program {
             function_declarations: vec![FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![BlockItem::S(Statement::While {
                         condition: Expression::Binary(
@@ -791,7 +882,7 @@ mod tests {
         assert_matches!(
                     &program.function_declarations[0].body.as_ref().unwrap().items[0],
                         BlockItem::S(stmt) if matches!(
-                            &stmt, Statement::While { loop_label, .. } if *loop_label == Some("while.0".to_string())
+                            &stmt, Statement::While { loop_label, .. } if *loop_label == Some("while.0".into())
             )
         );
         assert_matches!(
@@ -801,7 +892,7 @@ mod tests {
                     &**body, Statement::Compound(block) if matches!(
                         &block.items[1], BlockItem::S(Statement::If { then, .. }) if matches!(
                             &**then, Statement::Break(loop_label) if
-                                *loop_label == Some("while.0".to_string())
+                                *loop_label == Some("while.0".into())
                             )
                     )
                 )
@@ -814,7 +905,7 @@ mod tests {
             BlockItem::S(stmt) if matches!(
                 &stmt, Statement::While { body, .. } if matches!(
                     &**body, Statement::Compound(block) if matches!(
-                        &block.items[0], BlockItem::S(Statement::For { loop_label, .. }) if *loop_label == Some("for.1".to_string())
+                        &block.items[0], BlockItem::S(Statement::For { loop_label, .. }) if *loop_label == Some("for.1".into())
                     )
                 )
             )
@@ -828,7 +919,7 @@ mod tests {
                             &**body, Statement::Compound(block) if matches!(
                                 &block.items[0], BlockItem::S(Statement::If { then, .. } ) if matches!(
                                     &**then, Statement::Continue(loop_label) if
-                                *loop_label == Some("for.1".to_string())
+                                *loop_label == Some("for.1".into())
                             ))
                         )
                     )
