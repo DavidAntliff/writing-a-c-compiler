@@ -1817,6 +1817,7 @@ mod tests {
             ]
         );
     }
+
     #[test]
     fn test_function_declaration() {
         let input = r#"

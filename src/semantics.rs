@@ -11,7 +11,7 @@ pub enum Error {
     #[error("Undeclared variable: {0}")]
     UndeclaredVariable(Identifier),
 
-    #[error("Duplicate variable declaration: {0}")]
+    #[error("Duplicate declaration: {0}")]
     DuplicateVariableDeclaration(Identifier),
 
     #[error("Invalid lvalue")]
@@ -38,11 +38,17 @@ pub enum Error {
     #[error("Duplicate function parameter: {0}")]
     DuplicateFunctionParameter(Identifier),
 
+    #[error("Invalid function call: {0}")]
+    InvalidFunctionCall(Identifier),
+
     #[error("Duplicate function declaration: {0}")]
     DuplicateFunctionDeclaration(Identifier),
 
-    #[error("Mismatched function declaration: {0}")]
-    MismatchedFunctionDeclaration(Identifier),
+    #[error("Incompatible function declaration: {0}")]
+    IncompatibleFunctionDeclaration(Identifier),
+
+    #[error("Mismatched number of function arguments: {0}")]
+    MismatchedFunctionArguments(Identifier),
 
     #[error("Multiple function definitions: {0}")]
     MultipleDefinitions(Identifier),
@@ -56,9 +62,9 @@ pub(crate) fn analyse(program: &mut Program) -> Result<(), Error> {
 
     loop_labeling(program)?;
 
-    for function in &program.function_declarations {
-        goto_label_resolution(function)?;
-    }
+    let _symbol_table = type_checking(program)?;
+
+    goto_label_resolution(program)?;
 
     Ok(())
 }
@@ -572,28 +578,279 @@ fn loop_label_statement(
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
+enum Type {
+    Int,
+    Function { param_count: usize },
+}
+
+#[derive(Debug, PartialEq, Clone)]
+struct SymbolTableEntry {
+    type_: Type,
+    defined: bool,
+}
+
+struct SymbolTable {
+    table: HashMap<Identifier, SymbolTableEntry>,
+}
+
+impl SymbolTable {
+    fn new() -> Self {
+        SymbolTable {
+            table: HashMap::new(),
+        }
+    }
+
+    fn add(&mut self, identifier: Identifier, type_: Type, defined: bool) {
+        self.table
+            .insert(identifier, SymbolTableEntry { type_, defined });
+    }
+
+    fn get(&self, identifier: &Identifier) -> Option<&SymbolTableEntry> {
+        self.table.get(identifier)
+    }
+
+    fn contains_key(&self, identifier: &Identifier) -> bool {
+        self.table.contains_key(identifier)
+    }
+}
+
+fn type_checking(program: &Program) -> Result<SymbolTable, Error> {
+    let mut symbol_table = SymbolTable::new();
+
+    for function_decl in &program.function_declarations {
+        typecheck_function_declaration(function_decl, &mut symbol_table)?;
+    }
+
+    Ok(symbol_table)
+}
+
+fn typecheck_variable_declaration(
+    var_decl: &VarDecl,
+    symbol_table: &mut SymbolTable,
+) -> Result<(), Error> {
+    // Variable names are already unique at this point
+    assert!(
+        !symbol_table.contains_key(&var_decl.name),
+        "Variable already declared"
+    );
+
+    symbol_table.add(
+        var_decl.name.clone(),
+        Type::Int, // assuming all variables are of type Int for simplicity
+        var_decl.init.is_some(),
+    );
+    if let Some(init) = &var_decl.init {
+        typecheck_exp(init, symbol_table)?;
+    }
+
+    Ok(())
+}
+
+fn typecheck_function_declaration(
+    function_decl: &FunDecl,
+    symbol_table: &mut SymbolTable,
+) -> Result<(), Error> {
+    let fun_type = Type::Function {
+        param_count: function_decl.params.len(),
+    };
+    let has_body = function_decl.body.is_some();
+    let mut already_defined = false;
+
+    if symbol_table.contains_key(&function_decl.name) {
+        let existing_type = symbol_table.get(&function_decl.name).expect("should exist");
+        if existing_type.type_ != fun_type {
+            return Err(Error::IncompatibleFunctionDeclaration(
+                function_decl.name.clone(),
+            ));
+        }
+        already_defined = existing_type.defined;
+        if already_defined && has_body {
+            return Err(Error::MultipleDefinitions(function_decl.name.clone()));
+        }
+    }
+
+    symbol_table.add(
+        function_decl.name.clone(),
+        fun_type,
+        already_defined || has_body,
+    );
+
+    if let Some(body) = &function_decl.body {
+        for param in function_decl.params.iter() {
+            symbol_table.add(param.clone(), Type::Int, false);
+        }
+        typecheck_block(body, symbol_table)?;
+    }
+    Ok(())
+}
+
+fn typecheck_block(block: &Block, symbol_table: &mut SymbolTable) -> Result<(), Error> {
+    for item in &block.items {
+        match item {
+            BlockItem::S(statement) => typecheck_statement(statement, symbol_table)?,
+            BlockItem::D(declaration) => typecheck_declaration(declaration, symbol_table)?,
+        }
+    }
+    Ok(())
+}
+
+fn typecheck_statement(statement: &Statement, symbol_table: &mut SymbolTable) -> Result<(), Error> {
+    match statement {
+        Statement::Return(exp) => {
+            typecheck_exp(exp, symbol_table)?;
+        }
+        Statement::Expression(exp) => {
+            typecheck_exp(exp, symbol_table)?;
+        }
+        Statement::If {
+            condition,
+            then,
+            else_,
+        } => {
+            typecheck_exp(condition, symbol_table)?;
+            typecheck_statement(then, symbol_table)?;
+            if let Some(else_stmt) = else_ {
+                typecheck_statement(else_stmt, symbol_table)?;
+            }
+        }
+        Statement::Labeled { statement, .. } => {
+            // Labels are not checked here, they are checked in goto_label_resolution
+            typecheck_statement(statement, symbol_table)?;
+        }
+        Statement::Goto(_) => {
+            // Goto labels are checked in goto_label_resolution
+        }
+        Statement::Compound(block) => {
+            typecheck_block(block, symbol_table)?;
+        }
+        Statement::Break(_) | Statement::Continue(_) => {
+            // Break and continue do not have expressions to check
+        }
+        Statement::While {
+            condition, body, ..
+        } => {
+            typecheck_exp(condition, symbol_table)?;
+            typecheck_statement(body, symbol_table)?;
+        }
+        Statement::DoWhile {
+            body, condition, ..
+        } => {
+            typecheck_statement(body, symbol_table)?;
+            typecheck_exp(condition, symbol_table)?;
+        }
+        Statement::For {
+            init,
+            condition,
+            post,
+            body,
+            loop_label: _,
+        } => {
+            if let ForInit::InitDecl(var_decl) = init {
+                typecheck_variable_declaration(var_decl, symbol_table)?;
+            } else if let ForInit::InitExp(Some(exp)) = init {
+                typecheck_exp(exp, symbol_table)?;
+            }
+            if let Some(cond) = condition {
+                typecheck_exp(cond, symbol_table)?;
+            }
+            if let Some(post_exp) = post {
+                typecheck_exp(post_exp, symbol_table)?;
+            }
+            typecheck_statement(body, symbol_table)?;
+        }
+        Statement::Null => {}
+    }
+    Ok(())
+}
+
+fn typecheck_declaration(
+    declaration: &Declaration,
+    symbol_table: &mut SymbolTable,
+) -> Result<(), Error> {
+    match declaration {
+        Declaration::VarDecl(var_decl) => {
+            typecheck_variable_declaration(var_decl, symbol_table)?;
+        }
+        Declaration::FunDecl(fun_decl) => {
+            typecheck_function_declaration(fun_decl, symbol_table)?;
+        }
+    }
+    Ok(())
+}
+
+fn typecheck_exp(expression: &Expression, symbol_table: &mut SymbolTable) -> Result<(), Error> {
+    match expression {
+        Expression::Constant(_) => Ok(()),
+        Expression::Var(name) => {
+            let item = symbol_table.get(name);
+            match item {
+                Some(entry) if entry.type_ == Type::Int => Ok(()),
+                Some(_) => Err(Error::InvalidFunctionCall(name.clone())),
+                None => Err(Error::UndeclaredVariable(name.clone())),
+            }
+        }
+        Expression::Unary(_, exp) => typecheck_exp(exp, symbol_table),
+        Expression::Binary(_, left, right) => {
+            typecheck_exp(left, symbol_table)?;
+            typecheck_exp(right, symbol_table)
+        }
+        Expression::Assignment(left, right) => {
+            if !matches!(**left, Expression::Var(_)) {
+                return Err(Error::InvalidLValue);
+            }
+            typecheck_exp(left, symbol_table)?;
+            typecheck_exp(right, symbol_table)
+        }
+        Expression::Conditional(cond, then, else_) => {
+            typecheck_exp(cond, symbol_table)?;
+            typecheck_exp(then, symbol_table)?;
+            typecheck_exp(else_, symbol_table)
+        }
+        Expression::FunctionCall(fun_name, args) => {
+            let f_type = symbol_table
+                .get(fun_name)
+                .ok_or_else(|| Error::UndeclaredFunction(fun_name.clone()))?;
+            match f_type.type_ {
+                Type::Int => Err(Error::InvalidFunctionCall(fun_name.clone())),
+                Type::Function { param_count } => {
+                    if param_count != args.len() {
+                        return Err(Error::MismatchedFunctionArguments(fun_name.clone()));
+                    }
+                    for arg in args {
+                        typecheck_exp(arg, symbol_table)?;
+                    }
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
 // GOTO labels:
 
 type LabelMap = HashMap<Label, usize>;
 
-fn goto_label_resolution(function_decl: &FunDecl) -> Result<(), Error> {
-    let mut labels = LabelMap::new();
+fn goto_label_resolution(program: &Program) -> Result<(), Error> {
+    for function_decl in &program.function_declarations {
+        let mut labels = LabelMap::new();
 
-    if let Some(body) = &function_decl.body {
-        // AST is a tree, so we need to traverse it recursively,
-        // building up the labels as we go, then check for duplicates afterwards.
-        for item in body.items.iter() {
-            if let BlockItem::S(statement) = item {
-                let nested_labels = nested_goto_labels(statement)?;
-                extend_goto_labels(&mut labels, &nested_labels)?;
+        if let Some(body) = &function_decl.body {
+            // AST is a tree, so we need to traverse it recursively,
+            // building up the labels as we go, then check for duplicates afterwards.
+            for item in body.items.iter() {
+                if let BlockItem::S(statement) = item {
+                    let nested_labels = nested_goto_labels(statement)?;
+                    extend_goto_labels(&mut labels, &nested_labels)?;
+                }
             }
-        }
 
-        // Check for undeclared labels in Goto statements
-        for item in &body.items {
-            if let BlockItem::S(Statement::Goto(label)) = item {
-                if !labels.contains_key(label) {
-                    return Err(Error::UndeclaredLabel(label.as_str().to_owned()));
+            // Check for undeclared labels in Goto statements
+            for item in &body.items {
+                if let BlockItem::S(Statement::Goto(label)) = item {
+                    if !labels.contains_key(label) {
+                        return Err(Error::UndeclaredLabel(label.as_str().to_owned()));
+                    }
                 }
             }
         }

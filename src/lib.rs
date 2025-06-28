@@ -426,7 +426,7 @@ mod tests {
         );
     }
 
-    ///////    #[test]
+    #[test]
     fn test_invalid_function_duplicate_declaration() {
         // Page 177
         let input = r#"
@@ -436,40 +436,89 @@ mod tests {
         }"#;
         assert_matches!(
             lex_parse_and_analyse(input).unwrap_err(),
-            Error::Semantics(semantics::Error::DuplicateFunctionDeclaration(v))
+            Error::Semantics(semantics::Error::DuplicateVariableDeclaration(v))
             if v == "a"
         );
     }
 
-    ////////    #[test]
-    fn test_invalid_function_mismatched_declaration() {
-        // Page 177
+    #[test]
+    fn test_invalid_function_call() {
+        // Page 179
         let input = r#"
-        int foo(int a, int b);
-        int foo(int a) {
-            return a;
+        int main(void) {
+            int x = 3;
+            return x();
         }"#;
         assert_matches!(
             lex_parse_and_analyse(input).unwrap_err(),
-            Error::Semantics(semantics::Error::MismatchedFunctionDeclaration(v))
-            if v == "a"
+            Error::Semantics(semantics::Error::InvalidFunctionCall(v))
+            if v == "x.0"
         );
     }
 
-    ///////    #[test]
-    fn test_invalid_function_multiple_definitions() {
-        // Page 177
+    #[test]
+    fn test_invalid_function_mismatched_declaration() {
+        // Page 179
         let input = r#"
-        int foo(int a) {
-            return a;
+        int foo(int a, int b);
+        int foo(int a);
+        "#;
+        assert_matches!(
+            lex_parse_and_analyse(input).unwrap_err(),
+            Error::Semantics(semantics::Error::IncompatibleFunctionDeclaration(v))
+            if v == "foo"
+        );
+    }
+
+    #[test]
+    fn test_invalid_function_mismatched_nested_declaration() {
+        // Page 181
+        let input = r#"
+        int main(void) {
+            int foo(int a);
+            return foo(1);
         }
-        int foo(int a) {
-            return a;
+
+        int foo(int a, int b);
+        "#;
+        assert_matches!(
+            lex_parse_and_analyse(input).unwrap_err(),
+            Error::Semantics(semantics::Error::IncompatibleFunctionDeclaration(v))
+            if v == "foo"
+        );
+    }
+
+    #[test]
+    fn test_invalid_function_wrong_number_parameters() {
+        // Page 179
+        let input = r#"
+        int foo(int a, int b);
+
+        int main(void) {
+            return foo(1);
+        }
+        "#;
+        assert_matches!(
+            lex_parse_and_analyse(input).unwrap_err(),
+            Error::Semantics(semantics::Error::MismatchedFunctionArguments(v))
+            if v == "foo"
+        );
+    }
+
+    #[test]
+    fn test_invalid_function_multiple_definitions() {
+        // Page 179
+        let input = r#"
+        int foo(void) {
+            return 1;
+        }
+        int foo(void) {
+            return 2;
         }"#;
         assert_matches!(
             lex_parse_and_analyse(input).unwrap_err(),
             Error::Semantics(semantics::Error::MultipleDefinitions(v))
-            if v == "a"
+            if v == "foo"
         );
     }
 }
