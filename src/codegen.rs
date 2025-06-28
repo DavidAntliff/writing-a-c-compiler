@@ -34,8 +34,9 @@ pub(crate) fn parse(tacky: &tacky::Program) -> Result<asm::Program, CodegenError
 }
 
 fn pass1(program: &tacky::Program) -> asm::Program {
+    // TODO: Handle multiple function definitions
     asm::Program {
-        function_definition: function_definition(&program.function_definition),
+        function_definition: function_definition(&program.function_definitions[0]),
     }
 }
 
@@ -652,10 +653,11 @@ mod tests {
     #[test]
     fn test_pass1_return_constant() {
         let tacky_program = tacky::Program {
-            function_definition: tacky::FunctionDefinition {
+            function_definitions: vec![tacky::FunctionDefinition {
                 name: "main".into(),
+                params: vec![],
                 body: vec![Instruction::Return(Val::Constant(2))],
-            },
+            }],
         };
 
         let ast = pass1(&tacky_program);
@@ -676,8 +678,9 @@ mod tests {
     #[test]
     fn test_pass1_return_unary() {
         let tacky_program = tacky::Program {
-            function_definition: tacky::FunctionDefinition {
+            function_definitions: vec![tacky::FunctionDefinition {
                 name: "main".into(),
+                params: vec![],
                 body: vec![
                     Instruction::Unary {
                         op: UnaryOperator::Negate,
@@ -686,7 +689,7 @@ mod tests {
                     },
                     Instruction::Return(Val::Var("tmp.0".into())),
                 ],
-            },
+            }],
         };
 
         let ast = pass1(&tacky_program);
@@ -715,15 +718,16 @@ mod tests {
     #[test]
     fn test_pass1_binary_add() {
         let tacky_program = tacky::Program {
-            function_definition: tacky::FunctionDefinition {
+            function_definitions: vec![tacky::FunctionDefinition {
                 name: "main".into(),
+                params: vec![],
                 body: vec![Instruction::Binary {
                     op: BinaryOperator::Add,
                     src1: Val::Constant(2),
                     src2: Val::Constant(3),
                     dst: Val::Var("tmp.0".into()),
                 }],
-            },
+            }],
         };
 
         let ast = pass1(&tacky_program);
@@ -747,15 +751,16 @@ mod tests {
     #[test]
     fn test_pass1_binary_remainder() {
         let tacky_program = tacky::Program {
-            function_definition: tacky::FunctionDefinition {
+            function_definitions: vec![tacky::FunctionDefinition {
                 name: "main".into(),
+                params: vec![],
                 body: vec![Instruction::Binary {
                     op: BinaryOperator::Remainder,
                     src1: Val::Constant(2),
                     src2: Val::Constant(3),
                     dst: Val::Var("tmp.0".into()),
                 }],
-            },
+            }],
         };
 
         let ast = pass1(&tacky_program);
@@ -780,15 +785,16 @@ mod tests {
     #[test]
     fn test_pass1_binary_bitwise_xor() {
         let tacky_program = tacky::Program {
-            function_definition: tacky::FunctionDefinition {
+            function_definitions: vec![tacky::FunctionDefinition {
                 name: "main".into(),
+                params: vec![],
                 body: vec![Instruction::Binary {
                     op: BinaryOperator::BitXor,
                     src1: Val::Constant(2),
                     src2: Val::Constant(3),
                     dst: Val::Var("tmp.0".into()),
                 }],
-            },
+            }],
         };
 
         let ast = pass1(&tacky_program);

@@ -106,4 +106,5 @@ ch9: check-i386
     cargo build
     #book-tests/test_compiler ./pcc.py --chapter 9 --stage lex
     #book-tests/test_compiler ./pcc.py --chapter 9 --stage parse
-    book-tests/test_compiler ./pcc.py --chapter 9 --stage validate
+    #book-tests/test_compiler ./pcc.py --chapter 9 --stage validate
+    book-tests/test_compiler ./pcc.py --chapter 9 --stage tacky

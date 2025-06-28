@@ -1,8 +1,8 @@
 //! TACKY AST
 //!
 //! ASDL:
-//!   program = Program(function_definition)
-//!   function_definition = Function(identifier name, instruction* body)
+//!   program = Program(function_definition*)
+//!   function_definition = Function(identifier name, identifier* params, instruction* body)
 //!   instruction = Return(val)
 //!               | Unary(unary_operator, val src, val dst)
 //!               | Binary(binary_operator, val src1, val src2, val dst)
@@ -11,6 +11,7 @@
 //!               | JumpIfZero(val condition, identifier target)
 //!               | JumpIfNotZero(val condition, identifier target)
 //!               | Label(identifier)
+//!               | FunCall(identifier name, val* args, val dst)
 //!   val = Constant(int) | Var(identifier)
 //!   unary_operator = Complement | Negate | Not
 //!   binary_operator = Add | Subtract | Multiply | Divide | Remainder
@@ -19,7 +20,6 @@
 //!
 
 use crate::ast_c;
-//use crate::ast_c::{Block, Declaration, VarDecl};
 use crate::id_gen::IdGenerator;
 use thiserror::Error;
 
@@ -37,12 +37,13 @@ where
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Program {
-    pub(crate) function_definition: FunctionDefinition,
+    pub(crate) function_definitions: Vec<FunctionDefinition>,
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct FunctionDefinition {
     pub(crate) name: Identifier,
+    pub(crate) params: Vec<Identifier>,
     pub(crate) body: Vec<Instruction>,
 }
 
@@ -76,6 +77,11 @@ pub(crate) enum Instruction {
         target: Identifier,
     },
     Label(Identifier),
+    FunCall {
+        name: Identifier,
+        args: Vec<Val>,
+        dst: Val,
+    },
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -120,35 +126,48 @@ pub struct TackyError {
 }
 
 pub(crate) fn emit_program(program: &ast_c::Program) -> Result<Program, TackyError> {
-    let mut fun_defs = vec![];
+    let mut function_definitions = vec![];
     for fun_decl in &program.function_declarations {
-        fun_defs.push(emit_function_declaration(fun_decl)?);
+        let fun_def = emit_function_definition(fun_decl);
+        if let Some(fun_def) = fun_def {
+            function_definitions.push(fun_def);
+        }
     }
 
-    // TODO
     Ok(Program {
-        function_definition: fun_defs.pop().unwrap(), // TODO
+        function_definitions,
     })
 }
 
-fn emit_function_declaration(
-    function_decl: &ast_c::FunDecl,
-) -> Result<FunctionDefinition, TackyError> {
+fn emit_function_definition(function_decl: &ast_c::FunDecl) -> Option<FunctionDefinition> {
+    // Drop function declarations without a body
+    let body = match &function_decl.body {
+        None => {
+            return None;
+        }
+        Some(body) => body,
+    };
+
     let name: Identifier = (&function_decl.name).into();
 
     let mut instructions = vec![];
     let mut id_gen = IdGenerator::new();
 
-    if let Some(body) = &function_decl.body {
-        let val = emit_block(body, &mut instructions, &mut id_gen);
-        assert!(val.is_none(), "emit_block should return None");
-    }
+    let params = function_decl
+        .params
+        .iter()
+        .map(|p| Identifier(p.clone()))
+        .collect::<Vec<_>>();
+
+    let val = emit_block(body, &mut instructions, &mut id_gen);
+    assert!(val.is_none(), "emit_block should return None");
 
     // Add a Return(0) to the end of all functions (see page 112)
     instructions.push(Instruction::Return(Val::Constant(0)));
 
-    Ok(FunctionDefinition {
+    Some(FunctionDefinition {
         name,
+        params,
         body: instructions,
     })
 }
@@ -277,8 +296,18 @@ fn emit_expression(
             emit_exp_conditional(cond, e1, e2, instructions, id_gen)
         }
 
-        ast_c::Expression::FunctionCall(..) => {
-            todo!()
+        ast_c::Expression::FunctionCall(name, args) => {
+            let dst = Val::Var(next_var(id_gen));
+            let tacky_args: Vec<Val> = args
+                .iter()
+                .map(|arg| emit_expression(arg, instructions, id_gen))
+                .collect();
+            instructions.push(Instruction::FunCall {
+                name: name.clone().into(),
+                args: tacky_args,
+                dst: dst.clone(),
+            });
+            dst
         }
     }
 }
@@ -350,8 +379,9 @@ fn emit_declaration(
     id_gen: &mut IdGenerator,
 ) -> Option<Instruction> {
     match decl {
-        ast_c::Declaration::FunDecl(_) => {
-            todo!()
+        ast_c::Declaration::FunDecl(decl) => {
+            let def = emit_function_definition(decl);
+            assert_eq!(def, None, "Function declaration should not have a body");
         }
         ast_c::Declaration::VarDecl(decl) => {
             emit_variable_declaration(decl, instructions, id_gen);
@@ -893,7 +923,7 @@ mod tests {
         let program = ast_c::Program {
             function_declarations: vec![ast_c::FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
                         ast_c::Expression::Unary(
@@ -914,8 +944,9 @@ mod tests {
         assert_eq!(
             emit_program(&program).unwrap(),
             Program {
-                function_definition: FunctionDefinition {
+                function_definitions: vec![FunctionDefinition {
                     name: "main".into(),
+                    params: vec![],
                     body: vec![
                         Instruction::Unary {
                             op: UnaryOperator::Negate,
@@ -936,7 +967,7 @@ mod tests {
                         // Default Return(0)
                         Instruction::Return(Val::Constant(0)),
                     ]
-                }
+                }]
             }
         );
     }
@@ -947,7 +978,7 @@ mod tests {
         let program = ast_c::Program {
             function_declarations: vec![ast_c::FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
                         ast_c::Expression::Binary(
@@ -975,8 +1006,9 @@ mod tests {
         assert_eq!(
             emit_program(&program).unwrap(),
             Program {
-                function_definition: FunctionDefinition {
+                function_definitions: vec![FunctionDefinition {
                     name: "main".into(),
+                    params: vec![],
                     body: vec![
                         Instruction::Binary {
                             op: BinaryOperator::Multiply,
@@ -1006,7 +1038,7 @@ mod tests {
                         // Default Return(0)
                         Instruction::Return(Val::Constant(0)),
                     ],
-                }
+                }]
             }
         );
     }
@@ -1432,7 +1464,7 @@ mod tests {
         let program = ast_c::Program {
             function_declarations: vec![ast_c::FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![
                         // int b;
@@ -1478,8 +1510,9 @@ mod tests {
         assert_eq!(
             emit_program(&program).unwrap(),
             Program {
-                function_definition: FunctionDefinition {
+                function_definitions: vec![FunctionDefinition {
                     name: "main".into(),
+                    params: vec![],
                     body: vec![
                         // int b;
                         // NO TACKY
@@ -1511,7 +1544,7 @@ mod tests {
                         // Default Return(0)
                         Instruction::Return(Val::Constant(0)),
                     ],
-                }
+                }]
             }
         );
     }
@@ -1701,7 +1734,7 @@ mod tests {
         let program = ast_c::Program {
             function_declarations: vec![ast_c::FunDecl {
                 name: "main".into(),
-                params: vec!["void".into()],
+                params: vec![],
                 body: Some(Block {
                     items: vec![
                         ast_c::BlockItem::S(ast_c::Statement::Goto("label1".into())),
@@ -1739,8 +1772,9 @@ mod tests {
         assert_eq!(
             emit_program(&program).unwrap(),
             Program {
-                function_definition: FunctionDefinition {
+                function_definitions: vec![FunctionDefinition {
                     name: "main".into(),
+                    params: vec![],
                     body: vec![
                         Instruction::Jump {
                             target: "label1".into(),
@@ -1754,7 +1788,94 @@ mod tests {
                         // Default Return(0)
                         Instruction::Return(Val::Constant(0)),
                     ],
-                }
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn test_function_call() {
+        // int foo(int a, int b) {
+        //     return a + b;
+        // }
+        //
+        // int bar(int a);
+        //
+        // int main(void) {
+        //     return foo(42, 77);
+        // }
+        let program = ast_c::Program {
+            function_declarations: vec![
+                ast_c::FunDecl {
+                    name: "foo".into(),
+                    params: vec!["a".into(), "b".into()],
+                    body: Some(Block {
+                        items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
+                            ast_c::Expression::Binary(
+                                ast_c::BinaryOperator::Add,
+                                Box::new(ast_c::Expression::Var("a".into())),
+                                Box::new(ast_c::Expression::Var("b".into())),
+                            ),
+                        ))],
+                    }),
+                },
+                ast_c::FunDecl {
+                    name: "bar".into(),
+                    params: vec!["a".into()],
+                    body: None,
+                },
+                ast_c::FunDecl {
+                    name: "main".into(),
+                    params: vec![],
+                    body: Some(Block {
+                        items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
+                            ast_c::Expression::FunctionCall(
+                                "foo".into(),
+                                vec![
+                                    ast_c::Expression::Constant(42),
+                                    ast_c::Expression::Constant(77),
+                                ],
+                            ),
+                        ))],
+                    }),
+                },
+            ],
+        };
+
+        assert_eq!(
+            emit_program(&program).unwrap(),
+            Program {
+                function_definitions: vec![
+                    FunctionDefinition {
+                        name: "foo".into(),
+                        params: vec!["a".into(), "b".into()],
+                        body: vec![
+                            Instruction::Binary {
+                                op: BinaryOperator::Add,
+                                src1: Val::Var("a".into()),
+                                src2: Val::Var("b".into()),
+                                dst: Val::Var("tmp.0".into()),
+                            },
+                            Instruction::Return(Val::Var("tmp.0".into())),
+                            // Default Return(0)
+                            Instruction::Return(Val::Constant(0)),
+                        ],
+                    },
+                    FunctionDefinition {
+                        name: "main".into(),
+                        params: vec![],
+                        body: vec![
+                            Instruction::FunCall {
+                                name: "foo".into(),
+                                args: vec![Val::Constant(42), Val::Constant(77),],
+                                dst: Val::Var("tmp.0".into()),
+                            },
+                            Instruction::Return(Val::Var("tmp.0".into())),
+                            // Default Return(0)
+                            Instruction::Return(Val::Constant(0)),
+                        ],
+                    }
+                ]
             }
         );
     }
