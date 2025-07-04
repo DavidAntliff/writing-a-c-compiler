@@ -72,5 +72,26 @@ Function epilogue:
 
 This leaves `RBP` with the value of the caller's `RBP` before the prologue, and `RSP` pointing to the top of the caller's stack frame.
 
+## System V ABI
 
+https://gitlab.com/x86-psABIs/x86-64-ABI
+
+Argument Passing:
+ * The first six integer or pointer arguments are passed in registers `RDI`, `ESI`, `EDX`, `ECX`, `R8D`, and `R9D`.
+ * Additional arguments are passed on the stack, in reverse order.
+
+Return Values:
+ * A function's return value is passed in `EAX` for 32-bit integers, `RAX` for 64-bit integers.
+
+Argument Cleanup:
+    * The caller is responsible for cleaning up the stack after a function call.
+
+Caller-Saved & Callee-Saved Registers:
+ * Caller-saved registers are usable by the callee. The caller saves these on the stack, if necessary.
+ * Callee-saved registers are preserved by the callee. The callee saves these on the stack before it modifies them, and restores them prior to returning.
+ * Caller-saved registers: `RAX`, `R10`, `R11` & all argument registers
+ * Callee-saved registers: all other registers.
+
+Stack Alignment:
+ * The stack must be 16-byte aligned. I.e. `RSP` must be a multiple of 16 before a `call`.
 

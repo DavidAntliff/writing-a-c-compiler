@@ -1,8 +1,16 @@
 //! AST for x86_64 assembly
 //!
 //! ASDL:
-//!   program = Program(function_definition)
-//!   function_definition = Function(identifier name, instruction* instructions)
+//!   program = Program(function_definition*)
+//!   function_definition = Function(identifier name,
+//!                                  [ Mov(Reg(DI), param1),
+//!                                    Mov(Reg(SI), param2),
+//!                                    ...
+//!                                    Mov(Stack(16), param7),
+//!                                    MOV(Stack(24), param8),
+//!                                    ...
+//!                                  ] +
+//!                                  instruction* instructions)
 //!   instruction = Mov(operand src, operand dst)
 //!               | Unary(unary_operator, operand)
 //!               | Binary(binary_operator, operand, operand)
@@ -14,6 +22,9 @@
 //!               | SetCC(cond_code, operand)
 //!               | Label(identifier)
 //!               | AllocateStack(int)
+//!               | DeallocateStack(int)
+//!               | Push(operand)
+//!               | Call(identifier)
 //!               | Ret
 //!   unary_operator = Neg | Not
 //!   binary_operator = Add | Sub | Mult
@@ -22,7 +33,7 @@
 //!           | Pseudo(identifier)
 //!           | Stack(int)
 //!   cond_code = E | NE | L | LE | G | GE
-//!   reg = AX | DX | R10 | R11
+//!   reg = AX | CX | DX | DI | SI | R8 | R9 | R10 | R11
 //!
 //!
 //! Register Usage:
@@ -37,16 +48,19 @@ use crate::emitter::LABEL_PREFIX;
 use std::fmt::{Display, Formatter};
 
 pub(crate) const STACK_SLOT_SIZE: usize = 4; // 4 bytes per temporary variable
+pub(crate) const ABI_PARAM_SIZE: usize = 8; // 8 bytes per parameter
+pub(crate) const ABI_STACK_ALIGNMENT: usize = 16; // 16 byte alignment for stack
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Program {
-    pub(crate) function_definition: Function,
+    pub(crate) function_definitions: Vec<Function>,
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Function {
     pub(crate) name: Identifier,
     pub(crate) instructions: Vec<Instruction>,
+    pub(crate) stack_size: Option<usize>, // bytes
 }
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
@@ -111,6 +125,9 @@ pub(crate) enum Instruction {
     Label(Identifier),
     /// Allocate stack space in bytes
     AllocateStack(usize),
+    DeallocateStack(usize),
+    Push(Operand),
+    Call(Identifier),
     Ret,
 }
 
@@ -148,6 +165,16 @@ impl Display for Instruction {
             Instruction::Label(label) => write!(f, "{label}:"),
             Instruction::AllocateStack(size) => write!(f, "subq\t${size}, %rsp"),
             Instruction::Ret => write!(f, "ret"),
+
+            Instruction::DeallocateStack(_) => {
+                todo!()
+            }
+            Instruction::Push(_) => {
+                todo!()
+            }
+            Instruction::Call(_) => {
+                todo!()
+            }
         }
     }
 }
@@ -214,21 +241,30 @@ impl Display for Operand {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum Reg {
-    AX,
-    CX,
-    DX,
+    AX, // Accumulator
+    CX, // Counter
+    DX, // Data
+    DI, // Destination Index
+    SI, // Source Index
+    R8,
+    R9,
     R10,
     R11,
 }
 
 impl Display for Reg {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // 32-bit registers
         match self {
             Reg::AX => write!(f, "eax"),
             Reg::CX => write!(f, "ecx"), // FIXME, this is sometimes cl!!
             Reg::DX => write!(f, "edx"),
+            Reg::DI => write!(f, "edi"),
+            Reg::SI => write!(f, "esi"),
+            Reg::R8 => write!(f, "r8d"),
+            Reg::R9 => write!(f, "r9d"),
             Reg::R10 => write!(f, "r10d"),
             Reg::R11 => write!(f, "r11d"),
         }
@@ -250,6 +286,10 @@ impl Reg {
             Reg::AX => "a",
             Reg::CX => "c",
             Reg::DX => "d",
+            Reg::DI => "di",
+            Reg::SI => "si",
+            Reg::R8 => "r8",
+            Reg::R9 => "r9",
             Reg::R10 => "r10",
             Reg::R11 => "r11",
         }
@@ -260,6 +300,10 @@ impl Reg {
             Reg::AX => false,
             Reg::CX => false,
             Reg::DX => false,
+            Reg::DI => false,
+            Reg::SI => false,
+            Reg::R8 => true,
+            Reg::R9 => true,
             Reg::R10 => true,
             Reg::R11 => true,
         }

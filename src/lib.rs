@@ -116,37 +116,83 @@ pub fn do_the_thing(
 }
 
 #[cfg(test)]
-fn lex_and_parse(input: &str) -> Result<ast_c::Program, Error> {
-    Ok(parser::parse(&lexer::lex(input)?)?)
-}
-
-#[cfg(test)]
-fn lex_parse_and_analyse(input: &str) -> Result<ast_c::Program, Error> {
-    let mut ast = parser::parse(&lexer::lex(input)?)?;
-    semantics::analyse(&mut ast)?;
-    Ok(ast)
-}
-
-#[cfg(test)]
-fn lex_parse_analyse_and_codegen(input: &str) -> Result<ast_asm::Program, Error> {
-    let lexed = lexer::lex(input)?;
-    let mut ast = parser::parse(&lexed)?;
-    semantics::analyse(&mut ast)?;
-    let tacky = tacky::emit_program(&ast)?;
-    let asm = codegen::parse(&tacky)?;
-    Ok(asm)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::BufWriter;
 
     use crate::ast_c::{Block, BlockItem, Expression, FunDecl, Program, Statement};
     use crate::parser::ParserError;
     use assert_matches::assert_matches;
-
+    use assertables::{assert_eq_as_result, assert_ok};
     use std::sync::Once;
+
     static INIT: Once = Once::new();
+
+    fn lex_and_parse(input: &str) -> Result<ast_c::Program, Error> {
+        Ok(parser::parse(&lexer::lex(input)?)?)
+    }
+
+    fn lex_parse_and_analyse(input: &str) -> Result<ast_c::Program, Error> {
+        let mut ast = parser::parse(&lexer::lex(input)?)?;
+        semantics::analyse(&mut ast)?;
+        Ok(ast)
+    }
+
+    fn lex_parse_analyse_and_codegen(input: &str) -> Result<ast_asm::Program, Error> {
+        let lexed = lexer::lex(input)?;
+        let mut ast = parser::parse(&lexed)?;
+        semantics::analyse(&mut ast)?;
+        let tacky = tacky::emit_program(&ast)?;
+        let asm = codegen::parse(&tacky)?;
+        Ok(asm)
+    }
+
+    fn full_compile(input: &str) -> Result<String, Error> {
+        let asm = lex_parse_analyse_and_codegen(input)?;
+
+        let buffer = Vec::new();
+        let mut writer = BufWriter::new(buffer);
+
+        assert!(emitter::write_out(asm, &mut writer).is_ok());
+        let result = String::from_utf8(writer.into_inner().unwrap()).unwrap();
+        Ok(result)
+    }
+
+    fn listing_is_equivalent(listing: &str, expected: &str) -> Result<(), String> {
+        let listing = listing
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let expected = expected
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for (actual, expected) in listing.lines().zip(expected.lines()) {
+            asm_line_equivalent(actual, expected)?;
+            // if actual != expected {
+            //     log::debug!("Mismatch:\nActual: {actual}\nExpected: {expected}");
+            //     return false;
+            // }
+        }
+        Ok(())
+    }
+
+    fn asm_line_equivalent(line: &str, expected: &str) -> Result<(), String> {
+        let line = line.trim();
+        let expected = expected.trim();
+
+        let line_parts = line.split_whitespace().collect::<Vec<_>>();
+        let expected_parts = expected.split_whitespace().collect::<Vec<_>>();
+
+        assert_eq_as_result!(line_parts, expected_parts)?;
+
+        Ok(())
+    }
 
     #[allow(dead_code)]
     pub fn init_logger() {
@@ -274,7 +320,7 @@ mod tests {
         assert_eq!(
             lex_parse_analyse_and_codegen(input).unwrap(),
             Program {
-                function_definition: Function {
+                function_definitions: vec![Function {
                     name: "main".into(),
                     instructions: vec![
                         Instruction::AllocateStack(0),
@@ -289,8 +335,9 @@ mod tests {
                             dst: Operand::Reg(ast_asm::Reg::AX),
                         },
                         Instruction::Ret,
-                    ]
-                }
+                    ],
+                    stack_size: Some(0),
+                }]
             }
         );
     }
@@ -520,5 +567,38 @@ mod tests {
             Error::Semantics(semantics::Error::MultipleDefinitions(v))
             if v == "foo"
         );
+    }
+
+    #[test]
+    fn test_listing_9_29() {
+        // Listing 9-29 - include Mov at start of function body
+        let input = r#"
+        int simple(int param) {
+           return param;
+        }
+        "#;
+
+        let listing = full_compile(input);
+        assert_ok!(&listing);
+
+        assert_ok!(listing_is_equivalent(
+            &listing.unwrap(),
+            r#"
+            .globl simple
+            simple:
+            pushq %rbp
+            movq %rsp, %rbp
+            subq $16, %rsp
+            movl %edi, -4(%rbp)
+            movl -4(%rbp), %eax
+            movq %rbp, %rsp
+            popq %rbp
+            ret
+            movl $0, %eax
+            movq %rbp, %rsp
+            popq %rbp
+            ret
+            "#
+        ));
     }
 }

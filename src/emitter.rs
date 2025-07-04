@@ -34,36 +34,15 @@ pub(crate) fn emit(
     Ok(())
 }
 
-fn write_out<W: Write>(
+pub(crate) fn write_out<W: Write>(
     assembly: ast_asm::Program,
     writer: &mut BufWriter<W>,
 ) -> std::io::Result<()> {
-    let main_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
-    let main_symbol = format!(
-        "{main_prefix}{symbol}",
-        symbol = assembly.function_definition.name.0
-    );
+    for function in assembly.function_definitions {
+        write_out_function(function, writer)?;
+    }
 
     let indent = "\t";
-
-    //writeln!(writer, "    .text")?;
-    writeln!(writer, "{indent}.globl\t{}", main_symbol)?;
-    writeln!(writer, "{}:", main_symbol)?;
-
-    // Allocate stack
-    writeln!(writer, "{indent}pushq\t%rbp")?;
-    writeln!(writer, "{indent}movq\t%rsp, %rbp")?;
-
-    for instruction in assembly.function_definition.instructions {
-        if instruction == Instruction::Ret {
-            writeln!(writer, "{indent}movq\t%rbp, %rsp")?;
-            writeln!(writer, "{indent}popq\t%rbp")?;
-        }
-        if !matches!(instruction, Instruction::Label(_)) {
-            write!(writer, "{indent}")?;
-        }
-        writeln!(writer, "{instruction}")?;
-    }
 
     if cfg!(target_os = "linux") {
         writeln!(writer, "{indent}.section\t.note.GNU-stack,\"\",@progbits")?;
@@ -74,10 +53,49 @@ fn write_out<W: Write>(
     Ok(())
 }
 
+fn symbol_name(symbol: &ast_asm::Identifier) -> String {
+    if symbol.0 == "main" {
+        let main_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
+        format!("{main_prefix}{symbol}", symbol = symbol.0)
+    } else {
+        symbol.0.clone()
+    }
+}
+
+fn write_out_function<W: Write>(
+    function: ast_asm::Function,
+    writer: &mut BufWriter<W>,
+) -> std::io::Result<()> {
+    let indent = "\t";
+
+    let symbol = symbol_name(&function.name);
+
+    //writeln!(writer, "    .text")?;
+    writeln!(writer, "{indent}.globl\t{}", symbol)?;
+    writeln!(writer, "{}:", symbol)?;
+
+    // Allocate stack
+    writeln!(writer, "{indent}pushq\t%rbp")?;
+    writeln!(writer, "{indent}movq\t%rsp, %rbp")?;
+
+    for instruction in function.instructions {
+        if instruction == Instruction::Ret {
+            writeln!(writer, "{indent}movq\t%rbp, %rsp")?;
+            writeln!(writer, "{indent}popq\t%rbp")?;
+        }
+        if !matches!(instruction, Instruction::Label(_)) {
+            write!(writer, "{indent}")?;
+        }
+        writeln!(writer, "{instruction}")?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast_asm::{BinaryOperator, Function, Offset, Program, Reg};
+    use crate::ast_asm::{BinaryOperator, Function, Offset, Program, Reg, ABI_STACK_ALIGNMENT};
     use crate::ast_asm::{Operand, UnaryOperator};
     use crate::emitter::LABEL_PREFIX;
     use pretty_assertions::assert_eq;
@@ -85,7 +103,7 @@ mod tests {
     #[test]
     fn test_emit_instructions() {
         let program = Program {
-            function_definition: Function {
+            function_definitions: vec![Function {
                 name: "main".into(),
                 instructions: vec![
                     Instruction::Mov {
@@ -142,7 +160,8 @@ mod tests {
                     Instruction::AllocateStack(4),
                     Instruction::Ret,
                 ],
-            },
+                stack_size: Some(ABI_STACK_ALIGNMENT),
+            }],
         };
 
         // Create buffer to write to
