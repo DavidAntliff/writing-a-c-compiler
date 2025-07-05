@@ -114,7 +114,7 @@ impl ParserError {
         };
 
         ParserError {
-            message: format!("Expected {}, found {:?}", expected, found,),
+            message: format!("Expected {expected}, found {found:?}"),
             expected,
             found,
             offset,
@@ -748,7 +748,7 @@ fn for_init(i: &mut Tokens<'_>) -> ModalResult<ForInit> {
             _ => Err(ParserError {
                 message: "Expected a variable declaration".to_string(),
                 expected: "variable declaration".to_string(),
-                found: format!("{:?}", x),
+                found: format!("{x:?}"),
                 offset: 0, // TODO how do we get the offset here?
             }),
         }),

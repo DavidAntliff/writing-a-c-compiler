@@ -1,5 +1,6 @@
 use crate::ast_asm;
 use crate::ast_asm::Instruction;
+use crate::semantics::SymbolTable;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ pub struct EmitterError {
 
 pub(crate) fn emit(
     assembly: ast_asm::Program,
+    symbol_table: SymbolTable,
     output_filename: PathBuf,
 ) -> Result<(), EmitterError> {
     log::info!("Emitting output file: {}", output_filename.display());
@@ -27,7 +29,7 @@ pub(crate) fn emit(
     })?;
     let mut writer = BufWriter::new(file);
 
-    write_out(assembly, &mut writer).map_err(|e| EmitterError {
+    write_out(assembly, symbol_table, &mut writer).map_err(|e| EmitterError {
         message: format!("{e} while writing to {}", output_filename.display()),
     })?;
 
@@ -36,10 +38,11 @@ pub(crate) fn emit(
 
 pub(crate) fn write_out<W: Write>(
     assembly: ast_asm::Program,
+    symbol_table: SymbolTable,
     writer: &mut BufWriter<W>,
 ) -> std::io::Result<()> {
     for function in assembly.function_definitions {
-        write_out_function(function, writer)?;
+        write_out_function(function, &symbol_table, writer)?;
     }
 
     let indent = "\t";
@@ -53,26 +56,18 @@ pub(crate) fn write_out<W: Write>(
     Ok(())
 }
 
-fn symbol_name(symbol: &ast_asm::Identifier) -> String {
-    if symbol.0 == "main" {
-        let main_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
-        format!("{main_prefix}{symbol}", symbol = symbol.0)
-    } else {
-        symbol.0.clone()
-    }
-}
-
 fn write_out_function<W: Write>(
     function: ast_asm::Function,
+    symbol_table: &SymbolTable,
     writer: &mut BufWriter<W>,
 ) -> std::io::Result<()> {
     let indent = "\t";
 
-    let symbol = symbol_name(&function.name);
+    let symbol = &function.name.emit(symbol_table);
 
     //writeln!(writer, "    .text")?;
-    writeln!(writer, "{indent}.globl\t{}", symbol)?;
-    writeln!(writer, "{}:", symbol)?;
+    writeln!(writer, "{indent}.globl\t{symbol}")?;
+    writeln!(writer, "{symbol}:")?;
 
     // Allocate stack
     writeln!(writer, "{indent}pushq\t%rbp")?;
@@ -86,7 +81,7 @@ fn write_out_function<W: Write>(
         if !matches!(instruction, Instruction::Label(_)) {
             write!(writer, "{indent}")?;
         }
-        writeln!(writer, "{instruction}")?;
+        writeln!(writer, "{}", instruction.emit(symbol_table))?;
     }
 
     Ok(())
@@ -168,7 +163,8 @@ mod tests {
         let buffer = Vec::new();
         let mut writer = BufWriter::new(buffer);
 
-        assert!(write_out(program, &mut writer).is_ok());
+        let symbol_table = SymbolTable::new();
+        assert!(write_out(program, symbol_table, &mut writer).is_ok());
         let result = String::from_utf8(writer.into_inner().unwrap()).unwrap();
 
         let main_prefix = if cfg!(target_os = "macos") { "_" } else { "" };

@@ -57,16 +57,18 @@ pub enum Error {
     Message(String),
 }
 
-pub(crate) fn analyse(program: &mut Program) -> Result<(), Error> {
+pub(crate) fn analyse(program: &mut Program) -> Result<SymbolTable, Error> {
     identifier_resolution(program)?;
 
     loop_labeling(program)?;
 
-    let _symbol_table = type_checking(program)?;
+    let symbol_table = type_checking(program)?;
 
-    goto_label_resolution(program)?;
+    let _label_table = goto_label_resolution(program)?;
 
-    Ok(())
+    // TODO: combine the tables into one symbol table
+
+    Ok(symbol_table)
 }
 
 #[derive(Debug, Clone)]
@@ -456,7 +458,7 @@ fn loop_label_block(
 fn loop_label_statement(
     statement: &Statement,
     current_label: Option<Label>,
-    identifier_map: &mut IdentifierMap,
+    _identifier_map: &mut IdentifierMap,
     id_gen: &mut IdGenerator,
 ) -> Result<Statement, Error> {
     match statement {
@@ -469,14 +471,14 @@ fn loop_label_statement(
             then: Box::new(loop_label_statement(
                 then,
                 current_label.clone(),
-                identifier_map,
+                _identifier_map,
                 id_gen,
             )?),
             else_: if let Some(else_stmt) = else_ {
                 Some(Box::new(loop_label_statement(
                     else_stmt,
                     current_label.clone(),
-                    identifier_map,
+                    _identifier_map,
                     id_gen,
                 )?))
             } else {
@@ -488,7 +490,7 @@ fn loop_label_statement(
             statement: Box::new(loop_label_statement(
                 statement,
                 current_label.clone(),
-                identifier_map,
+                _identifier_map,
                 id_gen,
             )?),
         }),
@@ -500,7 +502,7 @@ fn loop_label_statement(
                         let labeled_statement = loop_label_statement(
                             statement,
                             current_label.clone(),
-                            identifier_map,
+                            _identifier_map,
                             id_gen,
                         )?;
                         items.push(BlockItem::S(labeled_statement));
@@ -533,7 +535,7 @@ fn loop_label_statement(
         } => {
             let loop_label = Some(unique_name("while", id_gen));
             let labeled_body =
-                loop_label_statement(body, loop_label.clone(), identifier_map, id_gen)?;
+                loop_label_statement(body, loop_label.clone(), _identifier_map, id_gen)?;
             Ok(Statement::While {
                 condition: condition.clone(),
                 body: Box::new(labeled_body),
@@ -547,7 +549,7 @@ fn loop_label_statement(
         } => {
             let loop_label = Some(unique_name("do_while", id_gen));
             let labeled_body =
-                loop_label_statement(body, loop_label.clone(), identifier_map, id_gen)?;
+                loop_label_statement(body, loop_label.clone(), _identifier_map, id_gen)?;
             Ok(Statement::DoWhile {
                 body: Box::new(labeled_body),
                 condition: condition.clone(),
@@ -563,7 +565,7 @@ fn loop_label_statement(
         } => {
             let loop_label = Some(unique_name("for", id_gen));
             let labeled_body =
-                loop_label_statement(body, loop_label.clone(), identifier_map, id_gen)?;
+                loop_label_statement(body, loop_label.clone(), _identifier_map, id_gen)?;
             Ok(Statement::For {
                 init: init.clone(),
                 condition: condition.clone(),
@@ -579,23 +581,24 @@ fn loop_label_statement(
 }
 
 #[derive(Debug, PartialEq, Clone)]
-enum Type {
+pub(crate) enum Type {
     Int,
     Function { param_count: usize },
 }
 
 #[derive(Debug, PartialEq, Clone)]
-struct SymbolTableEntry {
-    type_: Type,
-    defined: bool,
+pub(crate) struct SymbolTableEntry {
+    pub(crate) type_: Type,
+    pub(crate) defined: bool,
 }
 
-struct SymbolTable {
+#[derive(Debug)]
+pub(crate) struct SymbolTable {
     table: HashMap<Identifier, SymbolTableEntry>,
 }
 
 impl SymbolTable {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         SymbolTable {
             table: HashMap::new(),
         }
@@ -606,7 +609,7 @@ impl SymbolTable {
             .insert(identifier, SymbolTableEntry { type_, defined });
     }
 
-    fn get(&self, identifier: &Identifier) -> Option<&SymbolTableEntry> {
+    pub(crate) fn get(&self, identifier: &Identifier) -> Option<&SymbolTableEntry> {
         self.table.get(identifier)
     }
 
@@ -829,95 +832,167 @@ fn typecheck_exp(expression: &Expression, symbol_table: &mut SymbolTable) -> Res
 
 // GOTO labels:
 
-type LabelMap = HashMap<Label, usize>;
+#[derive(Debug)]
+pub(crate) struct LabelTableEntry {
+    //function_name: String,
+}
 
-fn goto_label_resolution(program: &Program) -> Result<(), Error> {
-    for function_decl in &program.function_declarations {
-        let mut labels = LabelMap::new();
+#[derive(Debug)]
+pub(crate) struct LabelTable {
+    table: HashMap<Label, LabelTableEntry>,
+}
 
-        if let Some(body) = &function_decl.body {
+impl LabelTable {
+    pub(crate) fn new() -> Self {
+        LabelTable {
+            table: HashMap::new(),
+        }
+    }
+
+    fn add(&mut self, label: Label) -> Result<(), Error> {
+        if self.table.contains_key(&label) {
+            return Err(Error::DuplicateLabel(label));
+        }
+        self.table.insert(label, LabelTableEntry {});
+        Ok(())
+    }
+
+    fn is_defined(&self, label: &Label) -> bool {
+        self.table.contains_key(label)
+    }
+}
+
+fn goto_label_resolution(program: &mut Program) -> Result<LabelTable, Error> {
+    // Labels must be unique across the entire program, but within a function, labels
+    // are renamed with the function name as a prefix. This ensures that labels remain unique
+    // globally, but duplicate labels within a function are detected.
+    let mut label_table = LabelTable::new();
+
+    for function_decl in &mut program.function_declarations {
+        // Use the function name as a prefix for all goto labels in this function
+        let function_id = &function_decl.name;
+
+        if let Some(body) = &mut function_decl.body {
             // AST is a tree, so we need to traverse it recursively,
-            // building up the labels as we go, then check for duplicates afterwards.
-            for item in body.items.iter() {
+            // building up the labels as we go
+            for item in body.items.iter_mut() {
                 if let BlockItem::S(statement) = item {
-                    let nested_labels = nested_goto_labels(statement)?;
-                    extend_goto_labels(&mut labels, &nested_labels)?;
+                    resolve_statement_goto(statement, function_id, &mut label_table)?;
                 }
             }
 
             // Check for undeclared labels in Goto statements
             for item in &body.items {
-                if let BlockItem::S(Statement::Goto(label)) = item {
-                    if !labels.contains_key(label) {
-                        return Err(Error::UndeclaredLabel(label.as_str().to_owned()));
-                    }
+                if let BlockItem::S(statement) = item {
+                    check_statement_goto(statement, &label_table)?;
                 }
             }
         }
     }
 
-    Ok(())
+    Ok(label_table)
 }
 
-fn extend_goto_labels(labels: &mut LabelMap, new_labels: &LabelMap) -> Result<(), Error> {
-    for label in new_labels.keys() {
-        if labels.contains_key(label) {
-            return Err(Error::DuplicateLabel(label.clone()));
-        }
-        labels.insert(label.clone(), 0); // value is not used, just to ensure uniqueness
+fn resolve_statement_goto(
+    statement: &mut Statement,
+    function_id: &str,
+    label_table: &mut LabelTable,
+) -> Result<(), Error> {
+    fn resolve_goto_label(label: &Label, function_id: &str) -> String {
+        format!("{label}.{function_id}")
     }
-    Ok(())
-}
 
-fn nested_goto_labels(statement: &Statement) -> Result<LabelMap, Error> {
-    let mut labels = HashMap::new();
     match statement {
         Statement::Labeled { label, statement } => {
-            labels.insert(label.clone(), 0);
-            let nested_labels = nested_goto_labels(statement)?;
-            extend_goto_labels(&mut labels, &nested_labels)?;
+            let new_label = resolve_goto_label(label, function_id);
+            label_table.add(new_label.clone())?;
+            *label = new_label;
+            resolve_statement_goto(statement, function_id, label_table)?;
         }
         Statement::If { then, else_, .. } => {
-            let nested_labels_ = nested_goto_labels(then)?;
-            extend_goto_labels(&mut labels, &nested_labels_)?;
+            resolve_statement_goto(then, function_id, label_table)?;
             if let Some(else_stmt) = else_ {
-                let nested_labels_ = nested_goto_labels(else_stmt)?;
-                extend_goto_labels(&mut labels, &nested_labels_)?;
+                resolve_statement_goto(else_stmt, function_id, label_table)?;
             }
         }
         Statement::Compound(block) => {
-            // must be unique within a function, not a scope
-            for item in &block.items {
+            // goto labels must be unique within a function, not a scope
+            for item in &mut block.items {
                 match item {
                     BlockItem::D(_) => continue, // declarations do not have labels
                     BlockItem::S(statement) => {
-                        let nested = nested_goto_labels(statement)?;
-                        extend_goto_labels(&mut labels, &nested)?;
+                        resolve_statement_goto(statement, function_id, label_table)?;
                     }
                 }
             }
         }
         Statement::While { body, .. } => {
-            let nested_labels = nested_goto_labels(body)?;
-            extend_goto_labels(&mut labels, &nested_labels)?;
-        },
+            resolve_statement_goto(body, function_id, label_table)?;
+        }
         Statement::DoWhile { body, .. } => {
-            let nested_labels = nested_goto_labels(body)?;
-            extend_goto_labels(&mut labels, &nested_labels)?;
-        },
+            resolve_statement_goto(body, function_id, label_table)?;
+        }
         Statement::For { body, .. } => {
-            let nested_labels = nested_goto_labels(body)?;
-            extend_goto_labels(&mut labels, &nested_labels)?;
-        },
+            resolve_statement_goto(body, function_id, label_table)?;
+        }
+        Statement::Goto(label) => {
+            // Check later if the label is defined
+            *label = resolve_goto_label(label, function_id);
+        }
         Statement::Return(_) // explicit listing of all variants
         | Statement::Break(_)
         | Statement::Continue(_)
         | Statement::Expression(_)
-        | Statement::Goto(_)
-        | Statement::Null => {
-        }
+        | Statement::Null => {}
     }
-    Ok(labels)
+    Ok(())
+}
+
+fn check_statement_goto(statement: &Statement, label_table: &LabelTable) -> Result<(), Error> {
+    // Check that all goto labels are defined in the label table
+
+    match statement {
+        Statement::Labeled { label, statement } => {
+            if !label_table.is_defined(label) {
+                return Err(Error::UndeclaredLabel(label.clone()));
+            }
+            check_statement_goto(statement, label_table)?;
+        }
+        Statement::Goto(label) => {
+            if !label_table.is_defined(label) {
+                return Err(Error::UndeclaredLabel(label.clone()));
+            }
+        }
+        Statement::If { then, else_, .. } => {
+            check_statement_goto(then, label_table)?;
+            if let Some(else_stmt) = else_ {
+                check_statement_goto(else_stmt, label_table)?;
+            }
+        }
+        Statement::Compound(block) => {
+            for item in &block.items {
+                if let BlockItem::S(statement) = item {
+                    check_statement_goto(statement, label_table)?;
+                }
+            }
+        }
+        Statement::While { body, .. } => {
+            check_statement_goto(body, label_table)?;
+        }
+        Statement::DoWhile { body, .. } => {
+            check_statement_goto(body, label_table)?;
+        }
+        Statement::For { body, .. } => {
+            check_statement_goto(body, label_table)?;
+        }
+        Statement::Return(_)  // explicit listing of all variants
+        | Statement::Break(_)
+        | Statement::Continue(_)
+        | Statement::Expression(_)
+        | Statement::Null => {}
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -925,6 +1000,7 @@ mod tests {
     use super::*;
     use crate::ast_c::{BinaryOperator, Block, FunDecl, VarDecl};
     use assert_matches::assert_matches;
+    use assertables::assert_ok;
 
     #[test]
     fn test_analyse() {
@@ -1035,6 +1111,42 @@ mod tests {
         };
 
         assert!(analyse(&mut program).is_err());
+    }
+
+    #[test]
+    fn test_goto_duplicate_label_in_different_functions() {
+        let mut program = Program {
+            function_declarations: vec![
+                FunDecl {
+                    name: "main".into(),
+                    params: vec![],
+                    body: Some(Block {
+                        items: vec![
+                            BlockItem::S(Statement::Goto("label1".into())),
+                            BlockItem::S(Statement::Labeled {
+                                label: "label1".into(),
+                                statement: Box::new(Statement::Null),
+                            }),
+                        ],
+                    }),
+                },
+                FunDecl {
+                    name: "other".into(),
+                    params: vec![],
+                    body: Some(Block {
+                        items: vec![
+                            BlockItem::S(Statement::Goto("label1".into())),
+                            BlockItem::S(Statement::Labeled {
+                                label: "label1".into(),
+                                statement: Box::new(Statement::Null),
+                            }),
+                        ],
+                    }),
+                },
+            ],
+        };
+
+        assert_ok!(analyse(&mut program));
     }
 
     #[test]

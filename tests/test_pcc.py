@@ -22,6 +22,7 @@ VALID_C_PROGRAMS = {
     "do_while": CProgram(Path("tests/c/valid/do_while.c"),),# 25),
     "for": CProgram(Path("tests/c/valid/for.c"),),# 150),
     "goto": CProgram(Path("tests/c/valid/goto.c"), 9),
+    "hello_world_putchar": CProgram(Path("tests/c/valid/hello_world_putchar.c"), 0, "Hello, World!\n"),
     "if_else": CProgram(Path("tests/c/valid/if_else.c"),),# 3),
     "function_call": CProgram(Path("tests/c/valid/function_call.c"),),# 3),
     "nested_loops": CProgram(Path("tests/c/valid/nested_loops.c"),),# 3),

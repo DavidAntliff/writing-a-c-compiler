@@ -45,6 +45,7 @@
 //!
 
 use crate::emitter::LABEL_PREFIX;
+use crate::semantics::{SymbolTable, Type};
 use std::fmt::{Display, Formatter};
 
 pub(crate) const STACK_SLOT_SIZE: usize = 4; // 4 bytes per temporary variable
@@ -66,9 +67,25 @@ pub(crate) struct Function {
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
 pub(crate) struct Identifier(pub(crate) String);
 
-impl Display for Identifier {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{LABEL_PREFIX}{}", self.0)
+impl Identifier {
+    pub(crate) fn emit_as_label(&self) -> String {
+        format!("{LABEL_PREFIX}{}", self.0)
+    }
+
+    pub(crate) fn emit(&self, symbol_table: &SymbolTable) -> String {
+        let prefix = if cfg!(target_os = "macos") { "_" } else { "" };
+        let suffix = if cfg!(target_os = "linux") {
+            if let Some(item) = symbol_table.get(&self.0)
+                && let Type::Function { .. } = item.type_
+            {
+                "@PLT"
+            } else {
+                ""
+            }
+        } else {
+            ""
+        };
+        format!("{prefix}{symbol}{suffix}", symbol = self.0)
     }
 }
 
@@ -131,49 +148,54 @@ pub(crate) enum Instruction {
     Ret,
 }
 
-impl Display for Instruction {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl Instruction {
+    pub(crate) fn emit(&self, symbol_table: &SymbolTable) -> String {
         match self {
-            Instruction::Mov { src, dst } => write!(f, "movl\t{src}, {dst}"),
-            Instruction::Unary { op, dst } => write!(f, "{op}\t{dst}"),
+            Instruction::Mov { src, dst } => format!("movl\t{src}, {dst}"),
+            Instruction::Unary { op, dst } => format!("{op}\t{dst}"),
             Instruction::Binary {
                 op,
                 src: Operand::Reg(r),
                 dst,
             } if *op == BinaryOperator::BitShiftLeft || *op == BinaryOperator::BitShiftRight => {
-                write!(
-                    f,
+                format!(
                     "{op}\t%{r}, {dst}",
                     r = r.fmt_with_width(RegisterWidth::W8Low)
                 )
             }
-            Instruction::Binary { op, src, dst } => write!(f, "{op}\t{src}, {dst}"),
-            Instruction::Idiv(src) => write!(f, "idivl\t{src}"),
-            Instruction::Cdq => write!(f, "cdq"),
-            Instruction::Cmp { src1, src2 } => write!(f, "cmpl\t{src1}, {src2}"),
-            Instruction::Jmp { target } => write!(f, "jmp\t{target}"),
-            Instruction::JmpCC { cc, target } => write!(f, "j{cc}\t{target}"),
+            Instruction::Binary { op, src, dst } => format!("{op}\t{src}, {dst}"),
+            Instruction::Idiv(src) => format!("idivl\t{src}"),
+            Instruction::Cdq => "cdq".into(),
+            Instruction::Cmp { src1, src2 } => format!("cmpl\t{src1}, {src2}"),
+            Instruction::Jmp { target } => format!("jmp\t{}", target.emit_as_label()),
+            Instruction::JmpCC { cc, target } => format!("j{cc}\t{}", target.emit_as_label()),
             Instruction::SetCC { cc, dst } => match dst {
-                Operand::Reg(r) => write!(
-                    f,
-                    "set{cc}\t%{r}",
-                    r = r.fmt_with_width(RegisterWidth::W8Low)
-                ),
-                Operand::Stack(offset) => write!(f, "set{cc}\t{offset}(%rbp)"),
+                Operand::Reg(r) => {
+                    format!("set{cc}\t%{r}", r = r.fmt_with_width(RegisterWidth::W8Low))
+                }
+                Operand::Stack(offset) => format!("set{cc}\t{offset}(%rbp)"),
                 _ => panic!("Invalid operand for SetCC"),
             },
-            Instruction::Label(label) => write!(f, "{label}:"),
-            Instruction::AllocateStack(size) => write!(f, "subq\t${size}, %rsp"),
-            Instruction::Ret => write!(f, "ret"),
+            Instruction::Label(label) => format!("{}:", label.emit_as_label()),
+            Instruction::AllocateStack(size) => format!("subq\t${size}, %rsp"),
+            Instruction::Ret => "ret".into(),
 
-            Instruction::DeallocateStack(_) => {
-                todo!()
+            Instruction::DeallocateStack(size) => {
+                format!("addq\t${size}, %rsp")
             }
-            Instruction::Push(_) => {
-                todo!()
+            Instruction::Push(op) => {
+                // Must be 64-bit register or immediate value
+                let src = match op {
+                    Operand::Reg(r) => format!("%{}", r.fmt_with_width(RegisterWidth::W64)),
+                    _ => format!("{op}"),
+                };
+                format!("pushq\t{src}")
+                //format!("pushq\t{op}")
             }
-            Instruction::Call(_) => {
-                todo!()
+            Instruction::Call(label) => {
+                #[cfg(target_os = "linux")]
+                todo!("Implement @PLT suffix on Linux");
+                format!("call\t{}", label.emit(symbol_table))
             }
         }
     }
@@ -234,7 +256,7 @@ impl Display for Operand {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Operand::Imm(i) => write!(f, "${i}"),
-            Operand::Reg(reg) => write!(f, "%{reg}"),
+            Operand::Reg(reg) => write!(f, "%{reg}"), // TODO: needs width consideration
             Operand::Pseudo(_) => panic!("Pseudo operands should not be emitted"),
             Operand::Stack(n) => write!(f, "{n}(%rbp)"),
         }
@@ -243,11 +265,14 @@ impl Display for Operand {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum Reg {
+    // Core Registers
     AX, // Accumulator
     CX, // Counter
     DX, // Data
+    // Index / Pointer Registers
     DI, // Destination Index
     SI, // Source Index
+    // Extended Registers
     R8,
     R9,
     R10,
@@ -271,7 +296,7 @@ impl Display for Reg {
     }
 }
 
-#[allow(unused)]
+#[expect(unused)]
 enum RegisterWidth {
     W8Low,
     W8High,
@@ -296,17 +321,11 @@ impl Reg {
     }
 
     fn extended(&self) -> bool {
-        match self {
-            Reg::AX => false,
-            Reg::CX => false,
-            Reg::DX => false,
-            Reg::DI => false,
-            Reg::SI => false,
-            Reg::R8 => true,
-            Reg::R9 => true,
-            Reg::R10 => true,
-            Reg::R11 => true,
-        }
+        matches!(self, Reg::R8 | Reg::R9 | Reg::R10 | Reg::R11)
+    }
+
+    fn core(&self) -> bool {
+        matches!(self, Reg::AX | Reg::CX | Reg::DX)
     }
 
     fn fmt_with_width(&self, width: RegisterWidth) -> String {
@@ -319,12 +338,13 @@ impl Reg {
                 RegisterWidth::W64 => self.base().to_string(),
             }
         } else {
+            let suffix = if self.core() { "x" } else { "" };
             match width {
                 RegisterWidth::W8Low => format!("{}l", self.base()),
                 RegisterWidth::W8High => format!("{}h", self.base()),
-                RegisterWidth::W16 => self.base().to_string(),
-                RegisterWidth::W32 => format!("e{}", self.base()),
-                RegisterWidth::W64 => format!("r{}", self.base()),
+                RegisterWidth::W16 => format!("{}{suffix}", self.base()),
+                RegisterWidth::W32 => format!("e{}{suffix}", self.base()),
+                RegisterWidth::W64 => format!("r{}{suffix}", self.base()),
             }
         }
     }

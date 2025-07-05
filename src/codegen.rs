@@ -457,8 +457,7 @@ fn pass3(ast: &asm::Program) -> Result<asm::Program, CodegenError> {
             .expect("Stack size must be set in pass 2");
         assert!(
             stack_size % ABI_STACK_ALIGNMENT == 0,
-            "Stack size must be a multiple of {} bytes",
-            ABI_STACK_ALIGNMENT
+            "Stack size must be a multiple of {ABI_STACK_ALIGNMENT} bytes"
         );
 
         let mut instructions = Vec::with_capacity(function_definition.instructions.len() + 1);

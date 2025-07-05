@@ -339,7 +339,7 @@ fn convert_binop(op: &ast_c::BinaryOperator) -> BinaryOperator {
         ast_c::BinaryOperator::LessOrEqual => BinaryOperator::LessOrEqual,
         ast_c::BinaryOperator::GreaterOrEqual => BinaryOperator::GreaterOrEqual,
         _ => {
-            panic!("Unsupported binary operator: {:?}", op);
+            panic!("Unsupported binary operator: {op:?}");
         }
     }
 }

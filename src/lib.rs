@@ -85,7 +85,7 @@ pub fn do_the_thing(
     }
 
     log::info!("Semantic analysis");
-    semantics::analyse(&mut ast)?;
+    let symbol_table = semantics::analyse(&mut ast)?;
 
     log::debug!("Semantics AST: {ast:#?}");
 
@@ -109,6 +109,7 @@ pub fn do_the_thing(
 
     emitter::emit(
         assembly,
+        symbol_table,
         output_filename.unwrap_or(input_filename.with_extension(".s")),
     )?;
 
@@ -122,6 +123,7 @@ mod tests {
 
     use crate::ast_c::{Block, BlockItem, Expression, FunDecl, Program, Statement};
     use crate::parser::ParserError;
+    use crate::semantics::SymbolTable;
     use assert_matches::assert_matches;
     use assertables::{assert_eq_as_result, assert_ok};
     use std::sync::Once;
@@ -153,7 +155,8 @@ mod tests {
         let buffer = Vec::new();
         let mut writer = BufWriter::new(buffer);
 
-        assert!(emitter::write_out(asm, &mut writer).is_ok());
+        let symbol_table = SymbolTable::new();
+        assert!(emitter::write_out(asm, symbol_table, &mut writer).is_ok());
         let result = String::from_utf8(writer.into_inner().unwrap()).unwrap();
         Ok(result)
     }
@@ -163,16 +166,16 @@ mod tests {
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(str::trim)
-            .collect::<Vec<_>>()
-            .join("\n");
+            .collect::<Vec<_>>(); //.join("\n");
         let expected = expected
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(str::trim)
-            .collect::<Vec<_>>()
-            .join("\n");
+            .collect::<Vec<_>>(); //.join("\n");
 
-        for (actual, expected) in listing.lines().zip(expected.lines()) {
+        assert_eq_as_result!(listing.len(), expected.len())?;
+
+        for (actual, expected) in listing.iter().zip(expected) {
             asm_line_equivalent(actual, expected)?;
             // if actual != expected {
             //     log::debug!("Mismatch:\nActual: {actual}\nExpected: {expected}");
@@ -581,24 +584,40 @@ mod tests {
         let listing = full_compile(input);
         assert_ok!(&listing);
 
+        let func_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
+        let func_suffix = if cfg!(target_os = "linux") {
+            "@PLT"
+        } else {
+            ""
+        };
+        let asm_suffix = if cfg!(target_os = "linux") {
+            "\t.section\t.note.GNU-stack,\"\",@progbits\n"
+        } else {
+            r#""#
+        };
+        let simple = format!("{func_prefix}simple{func_suffix}");
+
         assert_ok!(listing_is_equivalent(
             &listing.unwrap(),
-            r#"
-            .globl simple
-            simple:
-            pushq %rbp
-            movq %rsp, %rbp
-            subq $16, %rsp
-            movl %edi, -4(%rbp)
-            movl -4(%rbp), %eax
-            movq %rbp, %rsp
-            popq %rbp
-            ret
-            movl $0, %eax
-            movq %rbp, %rsp
-            popq %rbp
-            ret
+            &format!(
+                r#"
+                .globl {simple}
+            {simple}:
+                pushq %rbp
+                movq %rsp, %rbp
+                subq $16, %rsp
+                movl %edi, -4(%rbp)
+                movl -4(%rbp), %eax
+                movq %rbp, %rsp
+                popq %rbp
+                ret
+                movl $0, %eax
+                movq %rbp, %rsp
+                popq %rbp
+                ret
+                {asm_suffix}
             "#
+            )
         ));
     }
 }

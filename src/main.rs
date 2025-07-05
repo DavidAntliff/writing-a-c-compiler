@@ -56,7 +56,7 @@ fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(Env::default().default_filter_or(default_level)).init();
 
     let input = pcc::read_input(cli.input.clone()).map_err(|e| {
-        log::error!("Error reading input file: {}", e);
+        log::error!("Error reading input file: {e}");
         std::process::exit(1);
     })?;
 
@@ -85,7 +85,7 @@ fn main() -> anyhow::Result<()> {
             std::process::exit(1);
         }
         Err(e) => {
-            log::error!("Error: {}", e);
+            log::error!("Error: {e}");
             std::process::exit(1);
         }
     }

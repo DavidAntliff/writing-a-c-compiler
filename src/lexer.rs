@@ -134,7 +134,7 @@ impl TokenKind {
             TokenKind::QuestionMark => 3,
             TokenKind::Assignment => 1,
 
-            _ => panic!("Unexpected token: {:?}", self),
+            _ => panic!("Unexpected token: {self:?}"),
         }
     }
 }

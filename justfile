@@ -108,4 +108,6 @@ ch9: check-i386
     #book-tests/test_compiler ./pcc.py --chapter 9 --stage parse
     #book-tests/test_compiler ./pcc.py --chapter 9 --stage validate
     #book-tests/test_compiler ./pcc.py --chapter 9 --stage tacky
-    book-tests/test_compiler ./pcc.py --chapter 9 --stage codegen
+    #book-tests/test_compiler ./pcc.py --chapter 9 --stage codegen
+    #book-tests/test_compiler ./pcc.py --chapter 9
+    book-tests/test_compiler ./pcc.py --chapter 9 --bitwise --goto
