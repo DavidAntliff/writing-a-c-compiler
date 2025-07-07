@@ -9,7 +9,7 @@ mod semantics;
 mod tacky;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -19,6 +19,9 @@ pub enum Error {
         source: std::io::Error,
         path: PathBuf,
     },
+
+    #[error("Command error")]
+    Command(String),
 
     #[error(transparent)]
     Lexer(#[from] lexer::LexerError),
@@ -42,16 +45,17 @@ pub enum Error {
     Custom(String),
 }
 
-pub fn read_input(input_filename: PathBuf) -> Result<String, Error> {
+pub fn read_input(input_filename: &Path) -> Result<String, Error> {
     // read the input file as a string into memory
     log::info!("Reading input file: {}", input_filename.display());
-    let input = fs::read_to_string(&input_filename).map_err(|e| Error::Io {
+    let input = fs::read_to_string(input_filename).map_err(|e| Error::Io {
         source: e,
-        path: input_filename.clone(),
+        path: input_filename.into(),
     })?;
     Ok(input)
 }
 
+#[derive(Debug)]
 pub struct StopAfter {
     pub lex: bool,
     pub parse: bool,
@@ -60,11 +64,17 @@ pub struct StopAfter {
     pub codegen: bool,
 }
 
+impl StopAfter {
+    pub fn will_stop(&self) -> bool {
+        self.lex || self.parse || self.semantics || self.tacky || self.codegen
+    }
+}
+
 pub fn do_the_thing(
     input: &str,
-    input_filename: PathBuf,
-    output_filename: Option<PathBuf>,
-    stop_after: StopAfter,
+    input_filename: &Path,
+    output_filename: Option<&Path>,
+    stop_after: &StopAfter,
 ) -> Result<(), Error> {
     log::info!("Lexing input file: {}", input_filename.display());
     let lexed = lexer::lex(input)?;
@@ -107,11 +117,17 @@ pub fn do_the_thing(
         return Ok(());
     }
 
-    emitter::emit(
-        assembly,
-        symbol_table,
-        output_filename.unwrap_or(input_filename.with_extension(".s")),
-    )?;
+    // if output_filename is none, set it to input filename with .s extension
+    let output_filename = match output_filename {
+        Some(path) => path.to_path_buf(),
+        None => {
+            let mut path = input_filename.to_path_buf();
+            path.set_extension("s");
+            path
+        }
+    };
+
+    emitter::emit(assembly, symbol_table, output_filename)?;
 
     Ok(())
 }

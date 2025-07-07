@@ -23,6 +23,7 @@ test:
 
 
 pytest: check-i386
+    cargo build
     pytest -sv -n 8 tests
 
 

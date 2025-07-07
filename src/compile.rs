@@ -1,7 +1,7 @@
 use clap::Parser;
 use env_logger::Env;
 use line_numbers::LinePositions;
-use pcc::{Error, StopAfter, do_the_thing};
+use pcc::{do_the_thing, Error, StopAfter};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -55,7 +55,7 @@ fn main() -> anyhow::Result<()> {
     };
     env_logger::Builder::from_env(Env::default().default_filter_or(default_level)).init();
 
-    let input = pcc::read_input(cli.input.clone()).map_err(|e| {
+    let input = pcc::read_input(&cli.input).map_err(|e| {
         log::error!("Error reading input file: {e}");
         std::process::exit(1);
     })?;
@@ -72,7 +72,7 @@ fn main() -> anyhow::Result<()> {
     //       line numbers in errors may be incorrect. This is a known issue due to
     //       the preprocessor using the -P option.
 
-    match do_the_thing(&input, cli.input, cli.output, stop_after) {
+    match do_the_thing(&input, &cli.input, cli.output.as_deref(), &stop_after) {
         Ok(_) => Ok(()),
         Err(Error::Parser(e)) => {
             let line_positions = LinePositions::from(input.as_str());

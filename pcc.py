@@ -77,7 +77,7 @@ def compile(filename: Path,
     target = filename.with_suffix('.s')
     logger.debug(f"Compiling {target}")
 
-    cmd = f"target/debug/pcc {filename} -o {target}"
+    cmd = f"target/debug/compile {filename} -o {target}"
 
     if stop_after_lex:
         cmd += " --lex"

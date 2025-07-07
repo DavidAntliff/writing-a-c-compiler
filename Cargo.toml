@@ -20,3 +20,11 @@ version = "0.7.9"
 assert_matches = "1.5.0"
 pretty_assertions = "1.4.1"
 assertables = "9.8.0"
+
+[[bin]]
+name = "compile"
+path = "src/compile.rs"
+
+[[bin]]
+name = "pcc"
+path = "src/driver.rs"
