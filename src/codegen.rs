@@ -455,8 +455,9 @@ fn pass3(ast: &asm::Program) -> Result<asm::Program, CodegenError> {
         let stack_size = function_definition
             .stack_size
             .expect("Stack size must be set in pass 2");
-        assert!(
-            stack_size % ABI_STACK_ALIGNMENT == 0,
+        assert_eq!(
+            stack_size % ABI_STACK_ALIGNMENT,
+            0,
             "Stack size must be a multiple of {ABI_STACK_ALIGNMENT} bytes"
         );
 
@@ -650,8 +651,8 @@ mod tests {
     #[test]
     fn test_gen_binary_comparison() {
         let mut instructions = vec![];
-        let tmp0 = tacky::Identifier("tmp.0".into());
-        let tmp1 = tacky::Identifier("tmp.1".into());
+        let tmp0 = Identifier("tmp.0".into());
+        let tmp1 = Identifier("tmp.1".into());
         gen_instruction(
             &Instruction::Binary {
                 op: BinaryOperator::LessOrEqual,

@@ -130,11 +130,11 @@ mod tests {
 
     static INIT: Once = Once::new();
 
-    fn lex_and_parse(input: &str) -> Result<ast_c::Program, Error> {
+    fn lex_and_parse(input: &str) -> Result<Program, Error> {
         Ok(parser::parse(&lexer::lex(input)?)?)
     }
 
-    fn lex_parse_and_analyse(input: &str) -> Result<ast_c::Program, Error> {
+    fn lex_parse_and_analyse(input: &str) -> Result<Program, Error> {
         let mut ast = parser::parse(&lexer::lex(input)?)?;
         semantics::analyse(&mut ast)?;
         Ok(ast)

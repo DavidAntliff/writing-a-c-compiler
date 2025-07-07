@@ -90,7 +90,7 @@ fn write_out_function<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast_asm::{BinaryOperator, Function, Offset, Program, Reg, ABI_STACK_ALIGNMENT};
+    use crate::ast_asm::{ABI_STACK_ALIGNMENT, BinaryOperator, Function, Offset, Program, Reg};
     use crate::ast_asm::{Operand, UnaryOperator};
     use crate::emitter::LABEL_PREFIX;
     use pretty_assertions::assert_eq;

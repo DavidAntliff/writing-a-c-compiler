@@ -1,7 +1,7 @@
 use clap::Parser;
 use env_logger::Env;
 use line_numbers::LinePositions;
-use pcc::{do_the_thing, Error, StopAfter};
+use pcc::{Error, StopAfter, do_the_thing};
 use std::path::PathBuf;
 
 #[derive(Parser)]

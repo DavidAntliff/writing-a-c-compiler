@@ -951,8 +951,8 @@ mod tests {
     use crate::ast_c::*;
     use crate::lexer::lex;
     use assert_matches::assert_matches;
-    use winnow::error::ParseError;
     use winnow::Parser;
+    use winnow::error::ParseError;
 
     fn parse_program(input: &str) -> Program {
         let tokens = lex(input).unwrap();

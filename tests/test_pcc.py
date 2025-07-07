@@ -1,5 +1,3 @@
-from unittest.loader import VALID_MODULE_NAME
-
 import pytest
 
 from pathlib import Path
