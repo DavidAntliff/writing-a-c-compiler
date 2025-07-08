@@ -96,26 +96,6 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// {
-//             Ok(x) => x,
-//             Err(Error::Parser(e)) => {
-//                 let line_positions = LinePositions::from(input_filename.into());
-//                 let (line_num, column) = line_positions.from_offset(e.offset);
-//                 log::error!(
-//                     "Parser error at line {line_num}, column {column}: {e}",
-//                     line_num = line_num.display(),
-//                     column = column + 1
-//                 );
-//                 std::process::exit(1);
-//
-//             }
-//             Err(e) => {
-//                 log::error!("Error: {e}");
-//                 std::process::exit(1);
-//                 ()
-//             }
-//         };
-
 fn process_file(input_filename: &Path, stop_after: &StopAfter) -> anyhow::Result<PathBuf> {
     let preprocessed_input = preprocess(input_filename)?;
     let input = pcc::read_input(&preprocessed_input)?;
@@ -139,6 +119,13 @@ fn process_file(input_filename: &Path, stop_after: &StopAfter) -> anyhow::Result
 
 /// Generate .i files from the input files.
 fn preprocess(input_filename: &Path) -> Result<PathBuf, Error> {
+    if !input_filename.exists() || !input_filename.is_file() {
+        return Err(Error::Io {
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "Input file not found"),
+            path: input_filename.to_path_buf(),
+        });
+    }
+
     let mut preprocessed_filename = input_filename.to_path_buf();
     preprocessed_filename.set_extension("i");
 
@@ -160,18 +147,20 @@ fn preprocess(input_filename: &Path) -> Result<PathBuf, Error> {
         .arg("-c")
         .arg(&cmd)
         .status()
-        .map_err(|_| Error::Command(cmd))?;
+        .map(|status| {
+            if !status.success() {
+                Err(Error::Command(cmd.clone()))
+            } else {
+                Ok(())
+            }
+        })
+        .map_err(|_| Error::Command(cmd))??;
 
     Ok(preprocessed_filename)
 }
 
 fn compile(input: &str, input_filename: &Path, stop_after: &StopAfter) -> Result<PathBuf, Error> {
     info!("Compiling input file: {}", input_filename.display());
-
-    // .map_err(|e| {
-    //     log::error!("Error reading input file: {e}");
-    //     std::process::exit(1);
-    // })?;
 
     // TODO: Due to the preprocessor not emitting #line directives, the reported
     //       line numbers in errors may be incorrect. This is a known issue due to
@@ -237,7 +226,14 @@ fn assemble_and_link(
         .arg("-c")
         .arg(&cmd)
         .status()
-        .map_err(|_| Error::Command(cmd))?;
+        .map(|status| {
+            if !status.success() {
+                Err(Error::Command(cmd.clone()))
+            } else {
+                Ok(())
+            }
+        })
+        .map_err(|_| Error::Command(cmd))??;
 
     Ok(())
 }
