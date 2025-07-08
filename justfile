@@ -3,7 +3,9 @@ default: build test ch9 pytest
 
 test_compiler := 'book-tests/test_compiler'
 #cc := './pcc.py'
-cc := 'target/debug/pcc'
+profile := 'debug'
+#profile := 'release'
+cc := "target/" + profile + "/pcc"
 
 
 check-i386:
@@ -23,11 +25,11 @@ check-i386:
 
 
 build: check-i386
-    cargo build
+    cargo build {{ if profile == "release" { "--release" } else { "" } }}
 
 
 test:
-    cargo test
+    cargo test {{ if profile == "release" { "--release" } else { "" } }}
 
 
 pytest: build
