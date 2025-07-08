@@ -1,5 +1,7 @@
+use anyhow::anyhow;
 use clap::Parser;
 use env_logger::Env;
+use line_numbers::LinePositions;
 use log::{debug, info};
 use pcc::{do_the_thing, Error, StopAfter};
 use std::path::{Path, PathBuf};
@@ -114,9 +116,23 @@ fn main() -> anyhow::Result<()> {
 //             }
 //         };
 
-fn process_file(input_file: &Path, stop_after: &StopAfter) -> Result<PathBuf, Error> {
-    let preprocessed_input = preprocess(input_file)?;
-    let assembly_file = compile(&preprocessed_input, stop_after);
+fn process_file(input_filename: &Path, stop_after: &StopAfter) -> anyhow::Result<PathBuf> {
+    let preprocessed_input = preprocess(input_filename)?;
+    let input = pcc::read_input(&preprocessed_input)?;
+    let assembly_file = compile(&input, &preprocessed_input, stop_after).map_err(|e| match e {
+        Error::Parser(e) => {
+            let line_positions = LinePositions::from(input.as_str());
+            let (line_num, column) = line_positions.from_offset(e.offset);
+            anyhow!(
+                "Parser error at line {line_num}, column {column}: {e}",
+                line_num = line_num.display(),
+                column = column + 1
+            )
+        }
+        e => {
+            anyhow!("Error: {e}")
+        }
+    });
     let _ = std::fs::remove_file(preprocessed_input);
     assembly_file
 }
@@ -145,10 +161,9 @@ fn preprocess(input_filename: &Path) -> Result<PathBuf, Error> {
     Ok(preprocessed_filename)
 }
 
-fn compile(input_filename: &Path, stop_after: &StopAfter) -> Result<PathBuf, Error> {
+fn compile(input: &str, input_filename: &Path, stop_after: &StopAfter) -> Result<PathBuf, Error> {
     info!("Compiling input file: {}", input_filename.display());
 
-    let input = pcc::read_input(input_filename)?;
     // .map_err(|e| {
     //     log::error!("Error reading input file: {e}");
     //     std::process::exit(1);
@@ -161,7 +176,7 @@ fn compile(input_filename: &Path, stop_after: &StopAfter) -> Result<PathBuf, Err
     let mut output_filename = input_filename.to_path_buf();
     output_filename.set_extension("s");
 
-    do_the_thing(&input, input_filename, Some(&output_filename), stop_after)?;
+    do_the_thing(input, input_filename, Some(&output_filename), stop_after)?;
 
     Ok(output_filename)
 }

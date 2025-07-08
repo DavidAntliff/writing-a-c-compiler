@@ -1,5 +1,9 @@
 # test_compiler also tests previous chapters
-default: test ch9 pytest
+default: build test ch9 pytest
+
+test_compiler := 'book-tests/test_compiler'
+#cc := './pcc.py'
+cc := 'target/debug/pcc'
 
 
 check-i386:
@@ -18,97 +22,91 @@ check-i386:
 #    ./driver ; echo $?
 
 
+build: check-i386
+    cargo build
+
+
 test:
     cargo test
 
 
-pytest: check-i386
-    cargo build
+pytest: build
     pytest -sv -n 8 tests
 
 
-ch1: check-i386
-    cargo build
-    #book-tests/test_compiler ./pcc.py --chapter 1 --stage lex
-    #book-tests/test_compiler ./pcc.py --chapter 1 --stage parse
-    #book-tests/test_compiler ./pcc.py --chapter 1 --stage codegen
-    book-tests/test_compiler ./pcc.py --chapter 1
+ch1: build
+    #{{test_compiler}} {{cc}} --chapter 1 --stage lex
+    #{{test_compiler}} {{cc}} --chapter 1 --stage parse
+    #{{test_compiler}} {{cc}} --chapter 1 --stage codegen
+    {{test_compiler}} {{cc}} --chapter 1
 
 
-listing_1-1: check-i386
-    cargo build && ./pcc.py ch/1/listing_1.1.c && ch/1/listing_1.1 ; echo $?
+listing_1-1: build
+    {{cc}} ch/1/listing_1.1.c && ch/1/listing_1.1 ; echo $?
 
 
-ch2: check-i386
-    cargo build
-    #book-tests/test_compiler ./pcc.py --chapter 2 --stage lex
-    #book-tests/test_compiler ./pcc.py --chapter 2 --stage parse
-    #book-tests/test_compiler ./pcc.py --chapter 2 --stage tacky
-    #book-tests/test_compiler ./pcc.py --chapter 2 --stage codegen
-    book-tests/test_compiler ./pcc.py --chapter 2
+ch2: build
+    #{{test_compiler}} {{cc}} --chapter 2 --stage lex
+    #{{test_compiler}} {{cc}} --chapter 2 --stage parse
+    #{{test_compiler}} {{cc}} --chapter 2 --stage tacky
+    #{{test_compiler}} {{cc}} --chapter 2 --stage codegen
+    {{test_compiler}} {{cc}} --chapter 2
 
 
-listing_2-1: check-i386
-    cargo build && ./pcc.py ch/2/listing_2.1.c && ch/2/listing_2.1 ; echo $?
+listing_2-1: build
+    {{cc}} ch/2/listing_2.1.c && ch/2/listing_2.1 ; echo $?
 
 
-ch3: check-i386
-    cargo build
-    #book-tests/test_compiler ./pcc.py --chapter 3 --stage lex
-    #book-tests/test_compiler ./pcc.py --chapter 3 --stage parse
-    #book-tests/test_compiler ./pcc.py --chapter 3 --stage tacky
-    #book-tests/test_compiler ./pcc.py --chapter 3 --stage codegen
-    book-tests/test_compiler ./pcc.py --chapter 3 --bitwise
+ch3: build
+    #{{test_compiler}} {{cc}} --chapter 3 --stage lex
+    #{{test_compiler}} {{cc}} --chapter 3 --stage parse
+    #{{test_compiler}} {{cc}} --chapter 3 --stage tacky
+    #{{test_compiler}} {{cc}} --chapter 3 --stage codegen
+    {{test_compiler}} {{cc}} --chapter 3 --bitwise
 
 
-ch4: check-i386
-    cargo build
-    #book-tests/test_compiler ./pcc.py --chapter 4 --stage lex
-    #book-tests/test_compiler ./pcc.py --chapter 4 --stage parse
-    #book-tests/test_compiler ./pcc.py --chapter 4 --stage tacky
-    #book-tests/test_compiler ./pcc.py --chapter 4 --stage codegen
-    book-tests/test_compiler ./pcc.py --chapter 4 --bitwise
+ch4: build
+    #{{test_compiler}} {{cc}} --chapter 4 --stage lex
+    #{{test_compiler}} {{cc}} --chapter 4 --stage parse
+    #{{test_compiler}} {{cc}} --chapter 4 --stage tacky
+    #{{test_compiler}} {{cc}} --chapter 4 --stage codegen
+    {{test_compiler}} {{cc}} --chapter 4 --bitwise
 
 
-ch5: check-i386
-    cargo build
-    #book-tests/test_compiler ./pcc.py --chapter 5 --stage lex
-    #book-tests/test_compiler ./pcc.py --chapter 5 --stage parse
-    #book-tests/test_compiler ./pcc.py --chapter 5 --stage validate
-    book-tests/test_compiler ./pcc.py --chapter 5 --bitwise
+ch5: build
+    #{{test_compiler}} {{cc}} --chapter 5 --stage lex
+    #{{test_compiler}} {{cc}} --chapter 5 --stage parse
+    #{{test_compiler}} {{cc}} --chapter 5 --stage validate
+    {{test_compiler}} {{cc}} --chapter 5 --bitwise
 
 
-ch6: check-i386
-    cargo build
-    #book-tests/test_compiler ./pcc.py --chapter 6 --stage lex
-    #book-tests/test_compiler ./pcc.py --chapter 6 --stage parse
-    #book-tests/test_compiler ./pcc.py --chapter 6 --stage validate
-    #book-tests/test_compiler ./pcc.py --chapter 6 --bitwise
-    book-tests/test_compiler ./pcc.py --chapter 6 --bitwise --goto
+ch6: build
+    #{{test_compiler}} {{cc}} --chapter 6 --stage lex
+    #{{test_compiler}} {{cc}} --chapter 6 --stage parse
+    #{{test_compiler}} {{cc}} --chapter 6 --stage validate
+    #{{test_compiler}} {{cc}} --chapter 6 --bitwise
+    {{test_compiler}} {{cc}} --chapter 6 --bitwise --goto
 
 
-ch7: check-i386
-    cargo build
-    #book-tests/test_compiler ./pcc.py --chapter 7 --stage parse
-    #book-tests/test_compiler ./pcc.py --chapter 7 --stage validate
-    book-tests/test_compiler ./pcc.py --chapter 7 --bitwise --goto
+ch7: build
+    #{{test_compiler}} {{cc}} --chapter 7 --stage parse
+    #{{test_compiler}} {{cc}} --chapter 7 --stage validate
+    {{test_compiler}} {{cc}} --chapter 7 --bitwise --goto
 
 
-ch8: check-i386
-    cargo build
-    #book-tests/test_compiler ./pcc.py --chapter 8 --stage lex
-    #book-tests/test_compiler ./pcc.py --chapter 8 --stage parse
-    #book-tests/test_compiler ./pcc.py --chapter 8 --stage validate
-    #book-tests/test_compiler ./pcc.py --chapter 8
-    book-tests/test_compiler ./pcc.py --chapter 8 --bitwise --goto
+ch8: build
+    #{{test_compiler}} {{cc}} --chapter 8 --stage lex
+    #{{test_compiler}} {{cc}} --chapter 8 --stage parse
+    #{{test_compiler}} {{cc}} --chapter 8 --stage validate
+    #{{test_compiler}} {{cc}} --chapter 8
+    {{test_compiler}} {{cc}} --chapter 8 --bitwise --goto
 
 
-ch9: check-i386
-    cargo build
-    #book-tests/test_compiler ./pcc.py --chapter 9 --stage lex
-    #book-tests/test_compiler ./pcc.py --chapter 9 --stage parse
-    #book-tests/test_compiler ./pcc.py --chapter 9 --stage validate
-    #book-tests/test_compiler ./pcc.py --chapter 9 --stage tacky
-    #book-tests/test_compiler ./pcc.py --chapter 9 --stage codegen
-    #book-tests/test_compiler ./pcc.py --chapter 9
-    book-tests/test_compiler ./pcc.py --chapter 9 --bitwise --goto
+ch9: build
+    #{{test_compiler}} {{cc}} --chapter 9 --stage lex
+    #{{test_compiler}} {{cc}} --chapter 9 --stage parse
+    #{{test_compiler}} {{cc}} --chapter 9 --stage validate
+    #{{test_compiler}} {{cc}} --chapter 9 --stage tacky
+    #{{test_compiler}} {{cc}} --chapter 9 --stage codegen
+    #{{test_compiler}} {{cc}} --chapter 9
+    {{test_compiler}} {{cc}} --chapter 9 --bitwise --goto

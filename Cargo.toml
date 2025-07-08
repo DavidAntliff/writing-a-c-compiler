@@ -2,6 +2,7 @@
 name = "pcc"
 version = "0.1.0"
 edition = "2024"
+default-run = "pcc"
 
 [dependencies]
 assert_matches = "1.5.0"
