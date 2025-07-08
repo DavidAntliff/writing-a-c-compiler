@@ -19,7 +19,7 @@ struct Cli {
     quiet: bool,
 
     /// Path to the file(s) to be compiled
-    #[arg(value_name = "FILE")]
+    #[arg(value_name = "FILE", required = true, num_args = 1..)]
     input: Vec<PathBuf>,
 
     /// Path to the compiled binary (optional)
@@ -139,10 +139,14 @@ fn process_file(input_filename: &Path, stop_after: &StopAfter) -> anyhow::Result
 
 /// Generate .i files from the input files.
 fn preprocess(input_filename: &Path) -> Result<PathBuf, Error> {
-    info!("Preprocessing input file: {}", input_filename.display());
-
     let mut preprocessed_filename = input_filename.to_path_buf();
     preprocessed_filename.set_extension("i");
+
+    info!(
+        "Preprocessing input file: {} -> {}",
+        input_filename.display(),
+        preprocessed_filename.display()
+    );
 
     // TODO: remove the -P option to keep line numbers in the output
     let cmd = format!(
@@ -186,12 +190,30 @@ fn assemble_and_link(
     output_filename: &Option<PathBuf>,
     skip_link: bool,
 ) -> Result<(), Error> {
-    let output_filename = if output_filename.is_none() && assembly_files.len() == 1 {
-        assembly_files[0].with_extension(if skip_link { "o" } else { "" })
-    } else {
-        "a.out".into()
+    let output_filename = match output_filename {
+        Some(filename) => filename.clone(),
+        None => {
+            if assembly_files.len() == 1 {
+                assembly_files[0].with_extension(if skip_link { "o" } else { "" })
+            } else {
+                "a.out".into()
+            }
+        }
     };
-    info!("Assemble and link to: {}", output_filename.display());
+
+    info!(
+        "Assemble and link {} -> {}",
+        assembly_files
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+        if skip_link {
+            "object file".to_string()
+        } else {
+            output_filename.display().to_string()
+        }
+    );
 
     let filenames = assembly_files
         .iter()
@@ -200,9 +222,13 @@ fn assemble_and_link(
         .join(" ");
 
     let cmd = format!(
-        "gcc {} {filenames} -o {out}",
-        if skip_link { "-c" } else { "" },
-        out = output_filename.display()
+        "gcc {c} {filenames} {out}",
+        c = if skip_link { "-c" } else { "" },
+        out = if skip_link {
+            "".into()
+        } else {
+            format!("-o {}", output_filename.display())
+        },
     );
 
     debug!("Assemble and link command: {cmd}");
