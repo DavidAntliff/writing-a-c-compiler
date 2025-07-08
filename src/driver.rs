@@ -141,20 +141,8 @@ fn preprocess(input_filename: &Path) -> Result<PathBuf, Error> {
         input_filename.display(),
         preprocessed_filename.display()
     );
-    debug!("Preprocess command: {cmd}");
 
-    std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .status()
-        .map(|status| {
-            if !status.success() {
-                Err(Error::Command(cmd.clone()))
-            } else {
-                Ok(())
-            }
-        })
-        .map_err(|_| Error::Command(cmd))??;
+    do_command(&cmd)?;
 
     Ok(preprocessed_filename)
 }
@@ -197,7 +185,7 @@ fn assemble_and_link(
             .map(|p| p.display().to_string())
             .collect::<Vec<_>>()
             .join(", "),
-        if skip_link {
+        if skip_link && assembly_files.len() > 1 {
             "object file".to_string()
         } else {
             output_filename.display().to_string()
@@ -211,29 +199,32 @@ fn assemble_and_link(
         .join(" ");
 
     let cmd = format!(
-        "gcc {c} {filenames} {out}",
-        c = if skip_link { "-c" } else { "" },
-        out = if skip_link {
+        "gcc {c}{filenames} {out}",
+        c = if skip_link { "-c " } else { "" },
+        out = if skip_link && assembly_files.len() > 1 {
             "".into()
         } else {
             format!("-o {}", output_filename.display())
         },
     );
 
-    debug!("Assemble and link command: {cmd}");
+    do_command(&cmd)?;
 
+    Ok(())
+}
+
+fn do_command(cmd: &str) -> Result<(), Error> {
+    debug!("Executing command: {cmd}");
     std::process::Command::new("sh")
         .arg("-c")
-        .arg(&cmd)
+        .arg(cmd)
         .status()
         .map(|status| {
             if !status.success() {
-                Err(Error::Command(cmd.clone()))
+                Err(Error::Command(cmd.to_string()))
             } else {
                 Ok(())
             }
         })
-        .map_err(|_| Error::Command(cmd))??;
-
-    Ok(())
+        .map_err(|_| Error::Command(cmd.to_string()))?
 }

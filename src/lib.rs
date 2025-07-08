@@ -79,7 +79,7 @@ pub fn do_the_thing(
     log::info!("Lexing input file: {}", input_filename.display());
     let lexed = lexer::lex(input)?;
 
-    log::debug!("Lexed input: {lexed:#?}");
+    //log::debug!("Lexed input: {lexed:#?}");
 
     if stop_after.lex {
         return Ok(());
@@ -88,7 +88,7 @@ pub fn do_the_thing(
     log::info!("Parsing input file: {}", input_filename.display());
     let mut ast = parser::parse(&lexed)?;
 
-    log::debug!("AST: {ast:#?}");
+    //log::debug!("AST: {ast:#?}");
 
     if stop_after.parse {
         return Ok(());
@@ -97,7 +97,7 @@ pub fn do_the_thing(
     log::info!("Semantic analysis");
     let symbol_table = semantics::analyse(&mut ast)?;
 
-    log::debug!("Semantics AST: {ast:#?}");
+    //log::debug!("Semantics AST: {ast:#?}");
 
     if stop_after.semantics {
         return Ok(());
@@ -105,7 +105,7 @@ pub fn do_the_thing(
 
     let tacky = tacky::emit_program(&ast)?;
 
-    log::debug!("TACKY: {tacky:#?}");
+    //log::debug!("TACKY: {tacky:#?}");
 
     if stop_after.tacky {
         return Ok(());

@@ -26,17 +26,17 @@ const CALLING_CONVENTION_REGISTERS: [asm::Reg; 6] = [
 pub(crate) fn parse(tacky: &tacky::Program) -> Result<asm::Program, CodegenError> {
     // Pass 1 - convert TACKY AST to ASM AST, using pseudo registers for variables
     let ast = pass1(tacky);
-    log::debug!("Codegen PASS 1: {ast:#?}");
+    //log::debug!("Codegen PASS 1: {ast:#?}");
 
     // Pass 2 - replace pseudo registers with Stack operands
     let ast = pass2(ast)?;
-    log::debug!("Codegen PASS 2: {ast:#?}");
+    //log::debug!("Codegen PASS 2: {ast:#?}");
 
     // Pass 3:
     //   1. Insert AllocateStack instruction at the beginning of function_definition,
     //   2. Rewrite invalid MOV instructions.
     let ast = pass3(&ast)?;
-    log::debug!("Codegen PASS 3: {ast:#?}");
+    //log::debug!("Codegen PASS 3: {ast:#?}");
 
     Ok(ast)
 }
