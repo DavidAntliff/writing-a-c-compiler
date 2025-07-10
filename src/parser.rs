@@ -1,11 +1,12 @@
 //! Parser for the C language
 //!
 //! Grammar:
-//!   <program> ::= { <function-declaration> }
+//!   <program> ::= { <declaration> }
 //!   <declaration> ::= <variable-declaration> | <function-declaration>
-//!   <variable-declaration> ::= "int" <identifier> [ "=" <exp> ] ";"
-//!   <function-declaration> ::= "int" <identifier> "(" <param-list> ")" ( <block> | ";" )
+//!   <variable-declaration> ::= { <specifier> }+ <identifier> [ "=" <exp> ] ";"
+//!   <function-declaration> ::= { <specifier> }+ <identifier> "(" <param-list> ")" ( <block> | ";" )
 //!   <param-list> ::= "void" | "int" <identifier> { "," "int" <identifier> }
+//!   <specifier> ::= "int" | "static" | "extern"
 //!   <block> ::= "{" { <block-item> } "}"
 //!   <block-item> ::= <statement> | <declaration>
 //!   <for-init> ::= <variable-declaration> | [ <exp> ] ";"
@@ -41,9 +42,10 @@
 
 use crate::ast_c::{
     BinaryOperator, Block, BlockItem, Declaration, Expression, ForInit, FunDecl, Program,
-    Statement, UnaryOperator, VarDecl,
+    Statement, StorageClass, UnaryOperator, VarDecl,
 };
 use crate::lexer::{Identifier, Keyword, Token, TokenKind};
+use crate::semantics::Type;
 use thiserror::Error;
 use winnow::combinator::{
     alt, cut_err, fail, opt, peek, preceded, repeat, repeat_till, separated, terminated, trace,
@@ -165,25 +167,23 @@ pub(crate) fn parse(input: &[Token]) -> Result<Program, ParserError> {
 }
 
 fn program(i: &mut Tokens<'_>) -> ModalResult<Program> {
-    let function_declarations = repeat(
+    let declarations = repeat(
         0..,
-        function_declaration
+        declaration
             .context(StrContext::Label("program"))
             .context(StrContext::Expected(StrContextValue::Description(
                 "function declaration",
             ))),
     )
     .parse_next(i)?;
-    Ok(Program {
-        function_declarations,
-    })
+    Ok(Program { declarations })
 }
 
 fn function_declaration(i: &mut Tokens<'_>) -> ModalResult<FunDecl> {
-    literal(TokenKind::Keyword(Keyword::Int))
+    let (_type_, storage_class) = type_and_storage_class
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::Description(
-            "keyword",
+            "specifier",
         )))
         .parse_next(i)?;
 
@@ -204,9 +204,75 @@ fn function_declaration(i: &mut Tokens<'_>) -> ModalResult<FunDecl> {
             .context(StrContext::Expected(StrContextValue::Description("block")))
             .parse_next(i)?;
 
-        Ok(FunDecl { name, params, body })
+        Ok(FunDecl {
+            name,
+            params,
+            body,
+            storage_class: storage_class.clone(),
+        })
     })
     .parse_next(i)
+}
+
+fn type_and_storage_class(i: &mut Tokens<'_>) -> ModalResult<(Type, Option<StorageClass>)> {
+    let specifiers: Vec<Keyword> = repeat(
+        0..,
+        alt((
+            literal(TokenKind::Keyword(Keyword::Int)).value(Keyword::Int),
+            literal(TokenKind::Keyword(Keyword::Static)).value(Keyword::Static),
+            literal(TokenKind::Keyword(Keyword::Extern)).value(Keyword::Extern),
+        )),
+    )
+    .parse_next(i)?;
+
+    let mut types = vec![];
+    let mut storage_classes = vec![];
+
+    for specifier in specifiers {
+        if specifier == Keyword::Int {
+            types.push(specifier);
+        } else {
+            storage_classes.push(specifier);
+        }
+    }
+
+    if types.len() != 1 {
+        fail.parse_next(i)?; // TODO: error message
+        // return Err(ErrMode::Cut(ParserError {
+        //     message: "Invalid type specifier".to_string(),
+        //     expected: "single type specifier".to_string(),
+        //     found: "".into(),
+        //     offset: 0, // TODO how do we get the offset here?
+        // }));
+    }
+    if storage_classes.len() > 1 {
+        fail.parse_next(i)?; // TODO: error message
+        // return Err(ErrMode::Cut(ParserError {
+        //     message: "Invalid storage class".to_string(),
+        //     expected: "single storage class".to_string(),
+        //     found: "".into(),
+        //     offset: 0, // TODO how do we get the offset here?
+        // }));
+    }
+    let type_ = Type::Int;
+
+    let storage_class = if storage_classes.len() == 1
+        && let Some(class) = storage_classes.first()
+    {
+        to_storage_class(class)
+    } else {
+        None
+    };
+
+    Ok((type_, storage_class))
+}
+
+fn to_storage_class(keyword: &Keyword) -> Option<StorageClass> {
+    match keyword {
+        Keyword::Static => Some(StorageClass::Static),
+        Keyword::Extern => Some(StorageClass::Extern),
+        _ => panic!("Invalid storage class keyword"),
+    }
 }
 
 fn parameter_list(i: &mut Tokens<'_>) -> ModalResult<Vec<Identifier>> {
@@ -242,7 +308,7 @@ fn parameter_list(i: &mut Tokens<'_>) -> ModalResult<Vec<Identifier>> {
     .parse_next(i)?;
 
     literal(TokenKind::CloseParen)
-        .context(StrContext::Label("paremeter list"))
+        .context(StrContext::Label("parameter list"))
         .context(StrContext::Expected(StrContextValue::StringLiteral(")")))
         .parse_next(i)?;
 
@@ -290,30 +356,22 @@ fn block(i: &mut Tokens<'_>) -> ModalResult<Block> {
 }
 
 fn block_item(i: &mut Tokens<'_>) -> ModalResult<BlockItem> {
-    let first = peek(any)
-        .context(StrContext::Label("block_item"))
-        .context(StrContext::Expected(StrContextValue::Description(
-            "keyword or statement",
-        )))
-        .parse_next(i)?;
-
-    if let TokenKind::Keyword(Keyword::Int) = first.kind {
-        let decl = declaration
+    // TODO: use dispatch! on type/storage-class specifiers
+    alt((
+        declaration
             .context(StrContext::Label("block_item"))
             .context(StrContext::Expected(StrContextValue::Description(
                 "declaration",
             )))
-            .parse_next(i)?;
-        Ok(BlockItem::D(decl))
-    } else {
-        let stmt = statement
+            .map(BlockItem::D),
+        statement
             .context(StrContext::Label("block_item"))
             .context(StrContext::Expected(StrContextValue::Description(
                 "statement",
             )))
-            .parse_next(i)?;
-        Ok(BlockItem::S(stmt))
-    }
+            .map(BlockItem::S),
+    ))
+    .parse_next(i)
 }
 
 fn declaration(i: &mut Tokens<'_>) -> ModalResult<Declaration> {
@@ -329,10 +387,10 @@ fn declaration(i: &mut Tokens<'_>) -> ModalResult<Declaration> {
 }
 
 fn variable_declaration(i: &mut Tokens<'_>) -> ModalResult<VarDecl> {
-    literal(TokenKind::Keyword(Keyword::Int))
+    let (_type_, storage_class) = type_and_storage_class
         .context(StrContext::Label("variable declaration"))
         .context(StrContext::Expected(StrContextValue::Description(
-            "keyword",
+            "specifier",
         )))
         .parse_next(i)?;
 
@@ -370,7 +428,11 @@ fn variable_declaration(i: &mut Tokens<'_>) -> ModalResult<VarDecl> {
         )))
         .parse_next(i)?;
 
-    Ok(VarDecl { name, init })
+    Ok(VarDecl {
+        name,
+        init,
+        storage_class,
+    })
 }
 
 fn statement(i: &mut Tokens<'_>) -> ModalResult<Statement> {
@@ -740,8 +802,7 @@ fn statement_for(i: &mut Tokens<'_>) -> ModalResult<Statement> {
 }
 
 fn for_init(i: &mut Tokens<'_>) -> ModalResult<ForInit> {
-    // FIXME: this might be wrong? Needs to handle the FunDecl case properly.
-    // TODO: write a test to verify this works correctly.
+    // Only variable declarations are allowed here, not function declarations.
     alt((
         declaration.try_map(|x| match x {
             Declaration::VarDecl(var_decl) => Ok(ForInit::InitDecl(var_decl)),
@@ -951,8 +1012,8 @@ mod tests {
     use crate::ast_c::*;
     use crate::lexer::lex;
     use assert_matches::assert_matches;
-    use winnow::Parser;
     use winnow::error::ParseError;
+    use winnow::Parser;
 
     fn parse_program(input: &str) -> Program {
         let tokens = lex(input).unwrap();
@@ -1195,7 +1256,7 @@ mod tests {
         assert_eq!(
             ast,
             Program {
-                function_declarations: vec![FunDecl {
+                declarations: vec![Declaration::FunDecl(FunDecl {
                     name: "main".into(),
                     params: vec![],
                     body: Some(Block {
@@ -1203,6 +1264,7 @@ mod tests {
                             BlockItem::D(Declaration::VarDecl(VarDecl {
                                 name: "a".into(),
                                 init: None,
+                                storage_class: None,
                             })),
                             BlockItem::S(Statement::Expression(Expression::Assignment(
                                 Box::new(Expression::Var("a".into())),
@@ -1215,7 +1277,8 @@ mod tests {
                             )))
                         ]
                     }),
-                }]
+                    storage_class: None,
+                })]
             }
         )
     }
@@ -1405,7 +1468,8 @@ mod tests {
                             statement: Box::new(Statement::Return(Expression::Constant(0)))
                         })
                     ]
-                })
+                }),
+                storage_class: None,
             }
         );
     }
@@ -1441,7 +1505,8 @@ mod tests {
                         }),
                         BlockItem::S(Statement::Return(Expression::Constant(0))),
                     ]
-                })
+                }),
+                storage_class: None,
             }
         );
     }
@@ -1478,7 +1543,8 @@ mod tests {
                         BlockItem::S(Statement::Goto("label".into())),
                         BlockItem::S(Statement::Return(Expression::Constant(0))),
                     ]
-                })
+                }),
+                storage_class: None,
             }
         );
     }
@@ -1512,12 +1578,14 @@ mod tests {
                         BlockItem::D(Declaration::VarDecl(VarDecl {
                             name: "x".into(),
                             init: Some(Expression::Constant(1)),
+                            storage_class: None,
                         })),
                         BlockItem::S(Statement::Compound(Block {
                             items: vec![
                                 BlockItem::D(Declaration::VarDecl(VarDecl {
                                     name: "x".into(),
                                     init: Some(Expression::Constant(2)),
+                                    storage_class: None,
                                 })),
                                 BlockItem::S(Statement::If {
                                     condition: Expression::Binary(
@@ -1536,6 +1604,7 @@ mod tests {
                                             BlockItem::D(Declaration::VarDecl(VarDecl {
                                                 name: "x".into(),
                                                 init: Some(Expression::Constant(4)),
+                                                storage_class: None,
                                             }))
                                         ]
                                     })),
@@ -1546,7 +1615,8 @@ mod tests {
                         })),
                         BlockItem::S(Statement::Return(Expression::Var("x".into())))
                     ]
-                })
+                }),
+                storage_class: None,
             }
         );
     }
@@ -1582,7 +1652,8 @@ mod tests {
                         })),
                         loop_label: None,
                     })]
-                })
+                }),
+                storage_class: None,
             }
         );
     }
@@ -1618,7 +1689,8 @@ mod tests {
                         condition: Expression::Constant(1),
                         loop_label: None,
                     })]
-                })
+                }),
+                storage_class: None,
             }
         );
     }
@@ -1645,6 +1717,7 @@ mod tests {
                         init: ForInit::InitDecl(VarDecl {
                             name: "i".into(),
                             init: Some(Expression::Constant(0)),
+                            storage_class: None,
                         }),
                         condition: Some(Expression::Binary(
                             BinaryOperator::LessThan,
@@ -1672,7 +1745,8 @@ mod tests {
                         })),
                         loop_label: None,
                     })]
-                })
+                }),
+                storage_class: None,
             }
         );
     }
@@ -1828,11 +1902,12 @@ mod tests {
         assert_eq!(
             ast,
             Program {
-                function_declarations: vec![FunDecl {
+                declarations: vec![Declaration::FunDecl(FunDecl {
                     name: "main".into(),
                     params: vec![],
-                    body: None
-                }]
+                    body: None,
+                    storage_class: None,
+                })]
             }
         )
     }
@@ -1849,15 +1924,16 @@ mod tests {
         assert_eq!(
             ast,
             Program {
-                function_declarations: vec![
-                    FunDecl {
+                declarations: vec![
+                    Declaration::FunDecl(FunDecl {
                         name: "main".into(),
                         params: vec![],
                         body: Some(Block {
                             items: vec![BlockItem::S(Statement::Return(Expression::Constant(1)))]
                         }),
-                    },
-                    FunDecl {
+                        storage_class: None,
+                    }),
+                    Declaration::FunDecl(FunDecl {
                         name: "foo".into(),
                         params: vec!["x".into()],
                         body: Some(Block {
@@ -1865,8 +1941,9 @@ mod tests {
                                 "x".into()
                             )))]
                         }),
-                    },
-                    FunDecl {
+                        storage_class: None,
+                    }),
+                    Declaration::FunDecl(FunDecl {
                         name: "bar".into(),
                         params: vec!["x".into(), "y".into()],
                         body: Some(Block {
@@ -1876,7 +1953,8 @@ mod tests {
                                 Box::new(Expression::Var("y".into()))
                             )))]
                         }),
-                    }
+                        storage_class: None,
+                    })
                 ]
             }
         )
@@ -1896,7 +1974,7 @@ mod tests {
         assert_eq!(
             ast,
             Program {
-                function_declarations: vec![FunDecl {
+                declarations: vec![Declaration::FunDecl(FunDecl {
                     name: "main".into(),
                     params: vec![],
                     body: Some(Block {
@@ -1904,11 +1982,13 @@ mod tests {
                             BlockItem::D(Declaration::VarDecl(VarDecl {
                                 name: "x".into(),
                                 init: None,
+                                storage_class: None,
                             })),
                             BlockItem::D(Declaration::FunDecl(FunDecl {
                                 name: "helper".into(),
                                 params: vec!["y".into()],
                                 body: None,
+                                storage_class: None,
                             })),
                             BlockItem::S(Statement::Return(Expression::FunctionCall(
                                 "helper".into(),
@@ -1916,7 +1996,8 @@ mod tests {
                             ))),
                         ]
                     }),
-                }]
+                    storage_class: None,
+                })]
             }
         )
     }

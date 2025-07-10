@@ -1,10 +1,12 @@
 //! AST for the C language
 //!
 //! ASDL:
-//!   program = Program(function_declaration*)
+//!   program = Program(declaration*)
 //!   declaration = FunDecl(function_declaration) | VarDecl(variable_declaration)
-//!   variable_declaration = (identifier name, exp? init)
-//!   function_declaration = (identifier name, identifier* params, block? body)
+//!   variable_declaration = (identifier name, exp? init, storage_class?)
+//!   function_declaration = (identifier name, identifier* params,
+//!                           block? body, storage_class?)
+//!   storage_class = Static | Extern
 //!   block_item = S(statement) | D(declaration)
 //!   block = Block(block_item*)
 //!   for_init = InitDecl(variable_declaration) | InitExp(exp?)
@@ -38,7 +40,7 @@ pub(crate) type Label = String;
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Program {
-    pub(crate) function_declarations: Vec<FunDecl>,
+    pub(crate) declarations: Vec<Declaration>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -46,6 +48,13 @@ pub(crate) struct FunDecl {
     pub(crate) name: Identifier,
     pub(crate) params: Vec<Identifier>,
     pub(crate) body: Option<Block>,
+    pub(crate) storage_class: Option<StorageClass>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum StorageClass {
+    Static,
+    Extern,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -69,6 +78,7 @@ pub(crate) enum Declaration {
 pub(crate) struct VarDecl {
     pub(crate) name: Identifier,
     pub(crate) init: Option<Expression>,
+    pub(crate) storage_class: Option<StorageClass>,
 }
 
 #[derive(Debug, PartialEq, Clone)]

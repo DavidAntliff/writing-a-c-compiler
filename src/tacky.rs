@@ -127,10 +127,18 @@ pub struct TackyError {
 
 pub(crate) fn emit_program(program: &ast_c::Program) -> Result<Program, TackyError> {
     let mut function_definitions = vec![];
-    for fun_decl in &program.function_declarations {
-        let fun_def = emit_function_definition(fun_decl);
-        if let Some(fun_def) = fun_def {
-            function_definitions.push(fun_def);
+
+    for declaration in &program.declarations {
+        match declaration {
+            ast_c::Declaration::FunDecl(fun_decl) => {
+                let fun_def = emit_function_definition(fun_decl);
+                if let Some(fun_def) = fun_def {
+                    function_definitions.push(fun_def);
+                }
+            }
+            ast_c::Declaration::VarDecl(_) => {
+                // TODO
+            }
         }
     }
 
@@ -391,7 +399,11 @@ fn emit_declaration(
 }
 
 fn emit_variable_declaration(
-    ast_c::VarDecl { name, init }: &ast_c::VarDecl,
+    ast_c::VarDecl {
+        name,
+        init,
+        storage_class,
+    }: &ast_c::VarDecl,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
 ) -> Option<Instruction> {
@@ -786,7 +798,6 @@ fn emit_for(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast_c::Block;
 
     #[test]
     fn test_emit_tacky_constant_expression() {
@@ -921,10 +932,10 @@ mod tests {
     fn test_parse_program_return_unary_nested() {
         // int main(void) { return -(~(-8)); }
         let program = ast_c::Program {
-            function_declarations: vec![ast_c::FunDecl {
+            declarations: vec![ast_c::Declaration::FunDecl(ast_c::FunDecl {
                 name: "main".into(),
                 params: vec![],
-                body: Some(Block {
+                body: Some(ast_c::Block {
                     items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
                         ast_c::Expression::Unary(
                             ast_c::UnaryOperator::Negate,
@@ -938,7 +949,8 @@ mod tests {
                         ),
                     ))],
                 }),
-            }],
+                storage_class: None,
+            })],
         };
 
         assert_eq!(
@@ -976,10 +988,10 @@ mod tests {
     fn test_parse_program_return_binary() {
         // int main(void) { return 1 * 2 - 3 * (4 + 5); }   // -25
         let program = ast_c::Program {
-            function_declarations: vec![ast_c::FunDecl {
+            declarations: vec![ast_c::Declaration::FunDecl(ast_c::FunDecl {
                 name: "main".into(),
                 params: vec![],
-                body: Some(Block {
+                body: Some(ast_c::Block {
                     items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
                         ast_c::Expression::Binary(
                             ast_c::BinaryOperator::Subtract,
@@ -1000,7 +1012,8 @@ mod tests {
                         ),
                     ))],
                 }),
-            }],
+                storage_class: None,
+            })],
         };
 
         assert_eq!(
@@ -1462,15 +1475,16 @@ mod tests {
         //     return b;
         // }
         let program = ast_c::Program {
-            function_declarations: vec![ast_c::FunDecl {
+            declarations: vec![ast_c::Declaration::FunDecl(ast_c::FunDecl {
                 name: "main".into(),
                 params: vec![],
-                body: Some(Block {
+                body: Some(ast_c::Block {
                     items: vec![
                         // int b;
                         ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
                             name: "b.98".into(),
                             init: None,
+                            storage_class: None,
                         })),
                         // int a = 10 + 1;
                         ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
@@ -1480,6 +1494,7 @@ mod tests {
                                 Box::new(ast_c::Expression::Constant(10)),
                                 Box::new(ast_c::Expression::Constant(1)),
                             )),
+                            storage_class: None,
                         })),
                         // b = a * 2;
                         ast_c::BlockItem::S(ast_c::Statement::Expression(
@@ -1498,7 +1513,8 @@ mod tests {
                         ))),
                     ],
                 }),
-            }],
+                storage_class: None,
+            })],
         };
 
         // Listing 5-14: Expected TACKY:
@@ -1732,10 +1748,10 @@ mod tests {
         //     label2: return 2;
         // }
         let program = ast_c::Program {
-            function_declarations: vec![ast_c::FunDecl {
+            declarations: vec![ast_c::Declaration::FunDecl(ast_c::FunDecl {
                 name: "main".into(),
                 params: vec![],
-                body: Some(Block {
+                body: Some(ast_c::Block {
                     items: vec![
                         ast_c::BlockItem::S(ast_c::Statement::Goto("label1".into())),
                         ast_c::BlockItem::S(ast_c::Statement::Labeled {
@@ -1758,7 +1774,8 @@ mod tests {
                         }),
                     ],
                 }),
-            }],
+                storage_class: None,
+            })],
         };
 
         // Listing 5-14: Expected TACKY:
@@ -1805,11 +1822,11 @@ mod tests {
         //     return foo(42, 77);
         // }
         let program = ast_c::Program {
-            function_declarations: vec![
-                ast_c::FunDecl {
+            declarations: vec![
+                ast_c::Declaration::FunDecl(ast_c::FunDecl {
                     name: "foo".into(),
                     params: vec!["a".into(), "b".into()],
-                    body: Some(Block {
+                    body: Some(ast_c::Block {
                         items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
                             ast_c::Expression::Binary(
                                 ast_c::BinaryOperator::Add,
@@ -1818,16 +1835,18 @@ mod tests {
                             ),
                         ))],
                     }),
-                },
-                ast_c::FunDecl {
+                    storage_class: None,
+                }),
+                ast_c::Declaration::FunDecl(ast_c::FunDecl {
                     name: "bar".into(),
                     params: vec!["a".into()],
                     body: None,
-                },
-                ast_c::FunDecl {
+                    storage_class: None,
+                }),
+                ast_c::Declaration::FunDecl(ast_c::FunDecl {
                     name: "main".into(),
                     params: vec![],
-                    body: Some(Block {
+                    body: Some(ast_c::Block {
                         items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
                             ast_c::Expression::FunctionCall(
                                 "foo".into(),
@@ -1838,7 +1857,8 @@ mod tests {
                             ),
                         ))],
                     }),
-                },
+                    storage_class: None,
+                }),
             ],
         };
 

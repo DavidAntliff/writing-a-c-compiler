@@ -234,13 +234,14 @@ mod tests {
         assert_eq!(
             lex_and_parse(input).unwrap(),
             Program {
-                function_declarations: vec![FunDecl {
+                declarations: vec![ast_c::Declaration::FunDecl(FunDecl {
                     name: "main".into(),
                     params: vec![],
                     body: Some(Block {
                         items: vec![BlockItem::S(Statement::Return(Expression::Constant(2)))]
                     }),
-                }]
+                    storage_class: None,
+                })]
             }
         );
     }
