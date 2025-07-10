@@ -1,10 +1,10 @@
 use thiserror::Error;
-use winnow::LocatingSlice;
 use winnow::ascii::{alphanumeric0, digit1, multispace0};
 use winnow::combinator::{alt, not, repeat, terminated};
 use winnow::prelude::*;
 use winnow::stream::AsChar;
 use winnow::token::{one_of, take_while};
+use winnow::LocatingSlice;
 
 pub(crate) type Constant = usize;
 pub(crate) type Identifier = String;
@@ -152,6 +152,8 @@ pub(crate) enum Keyword {
     For,
     Break,
     Continue,
+    Static,
+    Extern,
 }
 
 pub(crate) fn lex(input: &str) -> Result<Vec<Token>, LexerError> {
@@ -330,6 +332,14 @@ fn identifier(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
         }),
         "continue" => Ok(Token {
             kind: TokenKind::Keyword(Keyword::Continue),
+            span,
+        }),
+        "static" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Static),
+            span,
+        }),
+        "extern" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Extern),
             span,
         }),
         _ => Ok(Token {
