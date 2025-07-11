@@ -406,7 +406,7 @@ mod tests {
         }"#;
         assert_matches!(
             lex_parse_and_analyse(input).unwrap_err(),
-            Error::Semantics(semantics::Error::DuplicateVariableDeclaration(v))
+            Error::Semantics(semantics::Error::ConflictingVariableDeclaration(v))
             if v == "a"
         );
     }
@@ -503,7 +503,7 @@ mod tests {
         }"#;
         assert_matches!(
             lex_parse_and_analyse(input).unwrap_err(),
-            Error::Semantics(semantics::Error::DuplicateVariableDeclaration(v))
+            Error::Semantics(semantics::Error::ConflictingVariableDeclaration(v))
             if v == "a"
         );
     }

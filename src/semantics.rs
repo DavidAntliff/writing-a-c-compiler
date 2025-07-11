@@ -1,5 +1,6 @@
 use crate::ast_c::{
-    Block, BlockItem, Declaration, Expression, ForInit, FunDecl, Label, Program, Statement, VarDecl,
+    Block, BlockItem, Declaration, Expression, ForInit, FunDecl, Label, Program, Statement,
+    StorageClass, VarDecl,
 };
 use crate::id_gen::IdGenerator;
 use crate::lexer::Identifier;
@@ -13,6 +14,9 @@ pub enum Error {
 
     #[error("Duplicate declaration: {0}")]
     DuplicateVariableDeclaration(Identifier),
+
+    #[error("Conflicting declaration: {0}")]
+    ConflictingVariableDeclaration(Identifier),
 
     #[error("Invalid lvalue")]
     InvalidLValue,
@@ -28,6 +32,9 @@ pub enum Error {
 
     #[error("Continue statement outside of loop")]
     ContinueOutsideLoop,
+
+    #[error("Invalid storage class: {0}")]
+    InvalidStorageClass(StorageClass),
 
     #[error("Invalid function definition: {0}")]
     InvalidFunctionDefinition(Identifier),
@@ -84,8 +91,6 @@ fn identifier_resolution(program: &mut Program) -> Result<(), Error> {
     let mut identifier_map = IdentifierMap::new();
     let mut id_gen = IdGenerator::new();
 
-    // TODO: for globals
-
     for declaration in &mut program.declarations {
         match declaration {
             Declaration::FunDecl(fun_decl) => {
@@ -93,8 +98,7 @@ fn identifier_resolution(program: &mut Program) -> Result<(), Error> {
                     resolve_function_declaration(fun_decl, &mut identifier_map, &mut id_gen)?;
             }
             Declaration::VarDecl(var_decl) => {
-                *var_decl =
-                    resolve_variable_declaration(var_decl, &mut identifier_map, &mut id_gen)?;
+                *var_decl = resolve_file_scope_variable_declaration(var_decl, &mut identifier_map)?;
             }
         }
     }
@@ -143,6 +147,8 @@ fn resolve_declaration(
         Declaration::FunDecl(fun_decl) => {
             if fun_decl.body.is_some() {
                 Err(Error::InvalidFunctionDefinition(fun_decl.name.clone()))
+            } else if fun_decl.storage_class == Some(StorageClass::Static) {
+                Err(Error::InvalidStorageClass(StorageClass::Static))
             } else {
                 Ok(Declaration::FunDecl(resolve_function_declaration(
                     fun_decl,
@@ -151,16 +157,34 @@ fn resolve_declaration(
                 )?))
             }
         }
-        Declaration::VarDecl(var_decl) => Ok(Declaration::VarDecl(resolve_variable_declaration(
-            var_decl,
-            identifier_map,
-            id_gen,
-        )?)),
+        Declaration::VarDecl(var_decl) => Ok(Declaration::VarDecl(
+            resolve_local_variable_declaration(var_decl, identifier_map, id_gen)?,
+        )),
     }
 }
 
-fn resolve_variable_declaration(
-    VarDecl {
+fn resolve_file_scope_variable_declaration(
+    var_decl @ VarDecl {
+        name,
+        init: _,
+        storage_class: _,
+    }: &VarDecl,
+    identifier_map: &mut IdentifierMap,
+) -> Result<VarDecl, Error> {
+    // External variables retain original names, and init should be constant (checked later)
+    identifier_map.insert(
+        name.clone(),
+        IdentifierMapEntry {
+            unique_name: name.clone(),
+            from_current_scope: true,
+            has_linkage: true, // internal or external
+        },
+    );
+    Ok(var_decl.clone())
+}
+
+fn resolve_local_variable_declaration(
+    decl @ VarDecl {
         name,
         init,
         storage_class,
@@ -168,31 +192,50 @@ fn resolve_variable_declaration(
     identifier_map: &mut IdentifierMap,
     id_gen: &mut IdGenerator,
 ) -> Result<VarDecl, Error> {
-    if identifier_map.contains_key(name) && identifier_map[name].from_current_scope {
-        return Err(Error::DuplicateVariableDeclaration(name.clone()));
+    // Check for conflicting declarations
+    if let Some(prev_entry) = identifier_map.get(name) {
+        if prev_entry.from_current_scope
+            && !(prev_entry.has_linkage && storage_class == &Some(StorageClass::Extern))
+        {
+            return Err(Error::ConflictingVariableDeclaration(name.clone()));
+        }
     }
 
-    let unique_name = unique_name(name, id_gen);
-    identifier_map.insert(
-        name.clone(),
-        IdentifierMapEntry {
-            unique_name: unique_name.clone(),
-            from_current_scope: true,
-            has_linkage: false, // local variables do not have linkage
-        },
-    );
-
-    let init = if let Some(init) = init {
-        Some(resolve_exp(init, identifier_map)?)
+    // Update the identifier map
+    if let Some(StorageClass::Extern) = storage_class {
+        // retain name
+        identifier_map.insert(
+            name.clone(),
+            IdentifierMapEntry {
+                unique_name: name.clone(),
+                from_current_scope: true,
+                has_linkage: true,
+            },
+        );
+        Ok(decl.clone())
     } else {
-        None
-    };
+        let unique_name = unique_name(name, id_gen);
+        identifier_map.insert(
+            name.clone(),
+            IdentifierMapEntry {
+                unique_name: unique_name.clone(),
+                from_current_scope: true,
+                has_linkage: false, // local variables do not have linkage
+            },
+        );
 
-    Ok(VarDecl {
-        name: unique_name,
-        init,
-        storage_class: storage_class.clone(),
-    })
+        let init = if let Some(init) = init {
+            Some(resolve_exp(init, identifier_map)?)
+        } else {
+            None
+        };
+
+        Ok(VarDecl {
+            name: unique_name,
+            init,
+            storage_class: storage_class.clone(),
+        })
+    }
 }
 
 fn resolve_function_declaration(
@@ -417,7 +460,7 @@ fn resolve_for_init(
     id_gen: &mut IdGenerator,
 ) -> Result<ForInit, Error> {
     match init {
-        ForInit::InitDecl(decl) => Ok(ForInit::InitDecl(resolve_variable_declaration(
+        ForInit::InitDecl(decl) => Ok(ForInit::InitDecl(resolve_local_variable_declaration(
             decl,
             identifier_map,
             id_gen,
@@ -1356,6 +1399,30 @@ mod tests {
                     )
                 )
             )
+        );
+    }
+
+    #[test]
+    fn test_function_declaration_static_error() {
+        let mut program = Program {
+            declarations: vec![Declaration::FunDecl(FunDecl {
+                name: "main".into(),
+                params: vec![],
+                body: Some(Block {
+                    items: vec![BlockItem::D(Declaration::FunDecl(FunDecl {
+                        name: "x".into(),
+                        params: vec![],
+                        body: None,
+                        storage_class: Some(StorageClass::Static), // not allowed
+                    }))],
+                }),
+                storage_class: None,
+            })],
+        };
+
+        assert_eq!(
+            identifier_resolution(&mut program),
+            Err(Error::InvalidStorageClass(StorageClass::Static))
         );
     }
 }

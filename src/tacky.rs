@@ -402,7 +402,7 @@ fn emit_variable_declaration(
     ast_c::VarDecl {
         name,
         init,
-        storage_class,
+        storage_class: _,
     }: &ast_c::VarDecl,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,

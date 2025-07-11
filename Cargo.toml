@@ -12,6 +12,7 @@ env_logger = "0.11.8"
 log = "0.4.27"
 anyhow = "1.0.98"
 line-numbers = "0.4.0"
+derive_more = { version = "2.0.1" , features = ["display"]}
 
 [dependencies.winnow]
 version = "0.7.9"

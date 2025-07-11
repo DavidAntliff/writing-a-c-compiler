@@ -36,6 +36,8 @@
 //!                   | LessOrEqual | GreaterOrEqual
 
 use crate::lexer::Identifier;
+use derive_more::Display;
+
 pub(crate) type Label = String;
 
 #[derive(Debug, PartialEq)]
@@ -51,8 +53,8 @@ pub(crate) struct FunDecl {
     pub(crate) storage_class: Option<StorageClass>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum StorageClass {
+#[derive(Debug, Display, PartialEq, Clone)]
+pub enum StorageClass {
     Static,
     Extern,
 }
