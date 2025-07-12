@@ -713,7 +713,12 @@ impl SymbolTable {
         }
     }
 
-    fn add(&mut self, identifier: Identifier, type_: Type, identifier_attrs: IdentifierAttrs) {
+    pub(crate) fn add(
+        &mut self,
+        identifier: Identifier,
+        type_: Type,
+        identifier_attrs: IdentifierAttrs,
+    ) {
         self.table.insert(
             identifier,
             SymbolTableEntry {
@@ -730,9 +735,25 @@ impl SymbolTable {
     // fn contains_key(&self, identifier: &Identifier) -> bool {
     //     self.table.contains_key(identifier)
     // }
+
+    pub(crate) fn expect_fun_global(&self, identifier: &Identifier) -> bool {
+        match self.get(identifier) {
+            Some(symbol) => match &symbol.attrs {
+                IdentifierAttrs::Fun { global, .. } => *global,
+                _ => panic!("Expected IdentifierAttrs::Fun for symbol {:?}", symbol),
+            },
+            None => panic!("Expected symbol for {:?}", identifier),
+        }
+    }
+
+    pub(crate) fn iter_sorted(&self) -> impl Iterator<Item = (&Identifier, &SymbolTableEntry)> {
+        let mut items: Vec<_> = self.table.iter().collect();
+        items.sort_by_key(|(id, _)| *id);
+        items.into_iter()
+    }
 }
 
-fn type_checking(program: &Program) -> Result<SymbolTable, Error> {
+pub(crate) fn type_checking(program: &Program) -> Result<SymbolTable, Error> {
     let mut symbol_table = SymbolTable::new();
 
     for declaration in &program.declarations {

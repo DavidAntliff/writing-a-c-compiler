@@ -117,5 +117,6 @@ ch9: build
 ch10: build
     #{{test_compiler}} {{cc}} --chapter 10 --stage lex
     #{{test_compiler}} {{cc}} --chapter 10 --stage parse
-    {{test_compiler}} {{cc}} --chapter 10 --stage validate
+    #{{test_compiler}} {{cc}} --chapter 10 --stage validate
+    {{test_compiler}} {{cc}} --chapter 10 --stage tacky
 

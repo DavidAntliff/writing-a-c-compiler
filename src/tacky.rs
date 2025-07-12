@@ -1,8 +1,9 @@
 //! TACKY AST
 //!
 //! ASDL:
-//!   program = Program(function_definition*)
-//!   function_definition = Function(identifier name, identifier* params, instruction* body)
+//!   program = Program(top_level*)
+//!   top_level = Function(identifier name, bool global, identifier* params, instruction* body)
+//!               | StaticVariable(identifier name, bool global, int init)
 //!   instruction = Return(val)
 //!               | Unary(unary_operator, val src, val dst)
 //!               | Binary(binary_operator, val src1, val src2, val dst)
@@ -21,6 +22,8 @@
 
 use crate::ast_c;
 use crate::id_gen::IdGenerator;
+use crate::semantics::{IdentifierAttrs, InitialValue, SymbolTable};
+use crate::tacky::TopLevel::StaticVariable;
 use thiserror::Error;
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
@@ -37,12 +40,23 @@ where
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Program {
-    pub(crate) function_definitions: Vec<FunctionDefinition>,
+    pub(crate) top_level: Vec<TopLevel>,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct FunctionDefinition {
+pub(crate) enum TopLevel {
+    Function(Function),
+    StaticVariable {
+        name: Identifier,
+        global: bool,
+        init: Option<usize>,
+    },
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Function {
     pub(crate) name: Identifier,
+    pub(crate) global: bool,
     pub(crate) params: Vec<Identifier>,
     pub(crate) body: Vec<Instruction>,
 }
@@ -125,29 +139,60 @@ pub struct TackyError {
     pub message: String,
 }
 
-pub(crate) fn emit_program(program: &ast_c::Program) -> Result<Program, TackyError> {
-    let mut function_definitions = vec![];
+pub(crate) fn emit_program(
+    program: &ast_c::Program,
+    symbol_table: &SymbolTable,
+) -> Result<Program, TackyError> {
+    let mut top_level = vec![];
 
     for declaration in &program.declarations {
         match declaration {
             ast_c::Declaration::FunDecl(fun_decl) => {
-                let fun_def = emit_function_definition(fun_decl);
+                let fun_def = emit_function_definition(fun_decl, symbol_table);
                 if let Some(fun_def) = fun_def {
-                    function_definitions.push(fun_def);
+                    top_level.push(TopLevel::Function(fun_def));
                 }
             }
             ast_c::Declaration::VarDecl(_) => {
-                // TODO
+                // Do not emit tacky for file-scope variable declarations
             }
         }
     }
 
-    Ok(Program {
-        function_definitions,
-    })
+    let static_symbols = convert_symbols_to_tacky(symbol_table)?;
+    top_level.extend(static_symbols);
+
+    Ok(Program { top_level })
 }
 
-fn emit_function_definition(function_decl: &ast_c::FunDecl) -> Option<FunctionDefinition> {
+fn convert_symbols_to_tacky(symbol_table: &SymbolTable) -> Result<Vec<TopLevel>, TackyError> {
+    let mut tacky_defs = vec![];
+
+    for (name, entry) in symbol_table.iter_sorted() {
+        if let IdentifierAttrs::Static { init, global } = &entry.attrs {
+            match init {
+                InitialValue::Initial(i) => tacky_defs.push(StaticVariable {
+                    name: name.into(),
+                    global: *global,
+                    init: Some(*i),
+                }),
+                InitialValue::Tentative => tacky_defs.push(StaticVariable {
+                    name: name.into(),
+                    global: *global,
+                    init: Some(0),
+                }),
+                InitialValue::NoInitialiser => (),
+            }
+        }
+    }
+
+    Ok(tacky_defs)
+}
+
+fn emit_function_definition(
+    function_decl: &ast_c::FunDecl,
+    symbol_table: &SymbolTable,
+) -> Option<Function> {
     // Drop function declarations without a body
     let body = match &function_decl.body {
         None => {
@@ -167,14 +212,17 @@ fn emit_function_definition(function_decl: &ast_c::FunDecl) -> Option<FunctionDe
         .map(|p| Identifier(p.clone()))
         .collect::<Vec<_>>();
 
-    let val = emit_block(body, &mut instructions, &mut id_gen);
+    let val = emit_block(body, &mut instructions, &mut id_gen, symbol_table);
     assert!(val.is_none(), "emit_block should return None");
 
     // Add a Return(0) to the end of all functions (see page 112)
     instructions.push(Instruction::Return(Val::Constant(0)));
 
-    Some(FunctionDefinition {
+    let global = symbol_table.expect_fun_global(&function_decl.name);
+
+    Some(Function {
         name,
+        global,
         params,
         body: instructions,
     })
@@ -356,9 +404,10 @@ fn emit_block(
     block: &ast_c::Block,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
+    symbol_table: &SymbolTable,
 ) -> Option<Instruction> {
     for item in &block.items {
-        emit_block_item(item, instructions, id_gen);
+        emit_block_item(item, instructions, id_gen, symbol_table);
     }
     None
 }
@@ -367,15 +416,17 @@ fn emit_block_item(
     item: &ast_c::BlockItem,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
+    symbol_table: &SymbolTable,
 ) -> Option<Instruction> {
     match item {
         ast_c::BlockItem::S(statement) => {
-            if let Some(instruction) = emit_statement(statement, instructions, id_gen) {
+            if let Some(instruction) = emit_statement(statement, instructions, id_gen, symbol_table)
+            {
                 instructions.push(instruction);
             }
         }
         ast_c::BlockItem::D(declaration) => {
-            emit_declaration(declaration, instructions, id_gen);
+            emit_declaration(declaration, instructions, id_gen, symbol_table);
         }
     }
     None
@@ -385,10 +436,11 @@ fn emit_declaration(
     decl: &ast_c::Declaration,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
+    symbol_table: &SymbolTable,
 ) -> Option<Instruction> {
     match decl {
         ast_c::Declaration::FunDecl(decl) => {
-            let def = emit_function_definition(decl);
+            let def = emit_function_definition(decl, symbol_table);
             assert_eq!(def, None, "Function declaration should not have a body");
         }
         ast_c::Declaration::VarDecl(decl) => {
@@ -402,11 +454,16 @@ fn emit_variable_declaration(
     ast_c::VarDecl {
         name,
         init,
-        storage_class: _,
+        storage_class,
     }: &ast_c::VarDecl,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
 ) -> Option<Instruction> {
+    // Do not emit for variables with static or extern storage class
+    if storage_class.is_some() {
+        return None;
+    }
+
     if let Some(init) = &init {
         let result = emit_expression(init, instructions, id_gen);
         instructions.push(Instruction::Copy {
@@ -421,6 +478,7 @@ fn emit_statement(
     statement: &ast_c::Statement,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
+    symbol_table: &SymbolTable,
 ) -> Option<Instruction> {
     match statement {
         ast_c::Statement::Return(exp) => {
@@ -436,16 +494,16 @@ fn emit_statement(
             condition,
             then,
             else_,
-        } => emit_statement_if(condition, then, else_, instructions, id_gen),
+        } => emit_statement_if(condition, then, else_, instructions, id_gen, symbol_table),
         ast_c::Statement::Labeled { label, statement } => {
             instructions.push(Instruction::Label(label.clone().into()));
-            emit_statement(statement, instructions, id_gen)
+            emit_statement(statement, instructions, id_gen, symbol_table)
         }
         ast_c::Statement::Goto(label) => {
             instructions.push(emit_jump(&label.into()));
             None
         }
-        ast_c::Statement::Compound(block) => emit_block(block, instructions, id_gen),
+        ast_c::Statement::Compound(block) => emit_block(block, instructions, id_gen, symbol_table),
         ast_c::Statement::Break(Some(label)) => {
             instructions.push(emit_jump(&break_label(label)));
             None
@@ -462,12 +520,26 @@ fn emit_statement(
             condition,
             body,
             loop_label,
-        } => emit_while(condition, body, loop_label, instructions, id_gen),
+        } => emit_while(
+            condition,
+            body,
+            loop_label,
+            instructions,
+            id_gen,
+            symbol_table,
+        ),
         ast_c::Statement::DoWhile {
             body,
             condition,
             loop_label,
-        } => emit_do_while(body, condition, loop_label, instructions, id_gen),
+        } => emit_do_while(
+            body,
+            condition,
+            loop_label,
+            instructions,
+            id_gen,
+            symbol_table,
+        ),
         ast_c::Statement::For {
             init,
             condition,
@@ -482,6 +554,7 @@ fn emit_statement(
             loop_label,
             instructions,
             id_gen,
+            symbol_table,
         ),
         ast_c::Statement::Null => None,
     }
@@ -493,6 +566,7 @@ fn emit_statement_if(
     else_: &Option<Box<ast_c::Statement>>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
+    symbol_table: &SymbolTable,
 ) -> Option<Instruction> {
     // if (condition) { then }:
     //   <instructions for condition>
@@ -527,7 +601,7 @@ fn emit_statement_if(
     });
 
     // then:
-    if let Some(instruction) = emit_statement(then, instructions, id_gen) {
+    if let Some(instruction) = emit_statement(then, instructions, id_gen, symbol_table) {
         instructions.push(instruction);
     }
 
@@ -540,7 +614,7 @@ fn emit_statement_if(
         // else:
         instructions.push(Instruction::Label(label_else));
 
-        if let Some(instruction) = emit_statement(else_stmt, instructions, id_gen) {
+        if let Some(instruction) = emit_statement(else_stmt, instructions, id_gen, symbol_table) {
             instructions.push(instruction);
         }
     }
@@ -661,6 +735,7 @@ fn emit_do_while(
     loop_label: &Option<crate::lexer::Identifier>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
+    symbol_table: &SymbolTable,
 ) -> Option<Instruction> {
     let loop_label = loop_label
         .clone()
@@ -669,7 +744,7 @@ fn emit_do_while(
     instructions.push(Instruction::Label(start_label.clone()));
 
     // loop body
-    let val = emit_statement(body, instructions, id_gen);
+    let val = emit_statement(body, instructions, id_gen, symbol_table);
     if let Some(val) = val {
         instructions.push(val);
     }
@@ -698,6 +773,7 @@ fn emit_while(
     loop_label: &Option<crate::lexer::Identifier>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
+    symbol_table: &SymbolTable,
 ) -> Option<Instruction> {
     let loop_label = loop_label
         .clone()
@@ -717,7 +793,7 @@ fn emit_while(
     });
 
     // loop body
-    let val = emit_statement(body, instructions, id_gen);
+    let val = emit_statement(body, instructions, id_gen, symbol_table);
     if let Some(val) = val {
         instructions.push(val);
     }
@@ -739,6 +815,7 @@ fn emit_for(
     loop_label: &Option<crate::lexer::Identifier>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
+    symbol_table: &SymbolTable,
 ) -> Option<Instruction> {
     let loop_label = loop_label
         .clone()
@@ -770,7 +847,7 @@ fn emit_for(
     }
 
     // Loop body
-    let val = emit_statement(body, instructions, id_gen);
+    let val = emit_statement(body, instructions, id_gen, symbol_table);
     if let Some(val) = val {
         instructions.push(val);
     }
@@ -798,6 +875,7 @@ fn emit_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::semantics::type_checking;
 
     #[test]
     fn test_emit_tacky_constant_expression() {
@@ -952,12 +1030,14 @@ mod tests {
                 storage_class: None,
             })],
         };
+        let symbol_table = type_checking(&program).unwrap();
 
         assert_eq!(
-            emit_program(&program).unwrap(),
+            emit_program(&program, &symbol_table).unwrap(),
             Program {
-                function_definitions: vec![FunctionDefinition {
+                top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
+                    global: true,
                     params: vec![],
                     body: vec![
                         Instruction::Unary {
@@ -979,7 +1059,7 @@ mod tests {
                         // Default Return(0)
                         Instruction::Return(Val::Constant(0)),
                     ]
-                }]
+                })]
             }
         );
     }
@@ -1015,12 +1095,14 @@ mod tests {
                 storage_class: None,
             })],
         };
+        let symbol_table = type_checking(&program).unwrap();
 
         assert_eq!(
-            emit_program(&program).unwrap(),
+            emit_program(&program, &symbol_table).unwrap(),
             Program {
-                function_definitions: vec![FunctionDefinition {
+                top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
+                    global: true,
                     params: vec![],
                     body: vec![
                         Instruction::Binary {
@@ -1051,7 +1133,7 @@ mod tests {
                         // Default Return(0)
                         Instruction::Return(Val::Constant(0)),
                     ],
-                }]
+                })]
             }
         );
     }
@@ -1066,7 +1148,8 @@ mod tests {
     fn do_emit_statement(stmt: &ast_c::Statement) -> (Option<Instruction>, Vec<Instruction>) {
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
-        let ins = emit_statement(stmt, &mut instructions, &mut id_gen);
+        let symbol_table = SymbolTable::new();
+        let ins = emit_statement(stmt, &mut instructions, &mut id_gen, &symbol_table);
         (ins, instructions)
     }
 
@@ -1516,6 +1599,7 @@ mod tests {
                 storage_class: None,
             })],
         };
+        let symbol_table = type_checking(&program).unwrap();
 
         // Listing 5-14: Expected TACKY:
         //   tmp.2 = 10 + 1
@@ -1524,10 +1608,11 @@ mod tests {
         //   b.0 = tmp.3
         //   Return(b.0)
         assert_eq!(
-            emit_program(&program).unwrap(),
+            emit_program(&program, &symbol_table).unwrap(),
             Program {
-                function_definitions: vec![FunctionDefinition {
+                top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
+                    global: true,
                     params: vec![],
                     body: vec![
                         // int b;
@@ -1560,7 +1645,7 @@ mod tests {
                         // Default Return(0)
                         Instruction::Return(Val::Constant(0)),
                     ],
-                }]
+                })]
             }
         );
     }
@@ -1777,6 +1862,7 @@ mod tests {
                 storage_class: None,
             })],
         };
+        let symbol_table = type_checking(&program).unwrap();
 
         // Listing 5-14: Expected TACKY:
         //   Jump(label1)
@@ -1787,10 +1873,11 @@ mod tests {
         //   .label2
         //     Return(2)
         assert_eq!(
-            emit_program(&program).unwrap(),
+            emit_program(&program, &symbol_table).unwrap(),
             Program {
-                function_definitions: vec![FunctionDefinition {
+                top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
+                    global: true,
                     params: vec![],
                     body: vec![
                         Instruction::Jump {
@@ -1805,7 +1892,7 @@ mod tests {
                         // Default Return(0)
                         Instruction::Return(Val::Constant(0)),
                     ],
-                }]
+                })]
             }
         );
     }
@@ -1861,13 +1948,15 @@ mod tests {
                 }),
             ],
         };
+        let symbol_table = type_checking(&program).unwrap();
 
         assert_eq!(
-            emit_program(&program).unwrap(),
+            emit_program(&program, &symbol_table).unwrap(),
             Program {
-                function_definitions: vec![
-                    FunctionDefinition {
+                top_level: vec![
+                    TopLevel::Function(Function {
                         name: "foo".into(),
+                        global: true,
                         params: vec!["a".into(), "b".into()],
                         body: vec![
                             Instruction::Binary {
@@ -1880,9 +1969,10 @@ mod tests {
                             // Default Return(0)
                             Instruction::Return(Val::Constant(0)),
                         ],
-                    },
-                    FunctionDefinition {
+                    }),
+                    TopLevel::Function(Function {
                         name: "main".into(),
+                        global: true,
                         params: vec![],
                         body: vec![
                             Instruction::FunCall {
@@ -1894,7 +1984,99 @@ mod tests {
                             // Default Return(0)
                             Instruction::Return(Val::Constant(0)),
                         ],
-                    }
+                    })
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_static_and_extern_variables() {
+        // extern int a;
+        // static int b = 42;
+        // int c;
+        //
+        // int main(void) {
+        //     static int d = 77;
+        //     extern int e;
+        //     return 0;
+        // }
+        let program = ast_c::Program {
+            declarations: vec![
+                ast_c::Declaration::VarDecl(ast_c::VarDecl {
+                    name: "a".into(),
+                    init: None,
+                    storage_class: Some(ast_c::StorageClass::Extern),
+                }),
+                ast_c::Declaration::VarDecl(ast_c::VarDecl {
+                    name: "b".into(),
+                    init: Some(ast_c::Expression::Constant(42)),
+                    storage_class: Some(ast_c::StorageClass::Static),
+                }),
+                ast_c::Declaration::VarDecl(ast_c::VarDecl {
+                    name: "c".into(),
+                    init: Some(ast_c::Expression::Constant(0)),
+                    storage_class: Some(ast_c::StorageClass::Extern),
+                }),
+                ast_c::Declaration::FunDecl(ast_c::FunDecl {
+                    name: "main".into(),
+                    params: vec![],
+                    body: Some(ast_c::Block {
+                        items: vec![
+                            ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
+                                name: "d".into(),
+                                init: Some(ast_c::Expression::Constant(77)),
+                                storage_class: Some(ast_c::StorageClass::Static),
+                            })),
+                            ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
+                                name: "e".into(),
+                                init: None,
+                                storage_class: Some(ast_c::StorageClass::Extern),
+                            })),
+                            ast_c::BlockItem::S(ast_c::Statement::Return(
+                                ast_c::Expression::Constant(0),
+                            )),
+                        ],
+                    }),
+                    storage_class: None,
+                }),
+            ],
+        };
+        let symbol_table = type_checking(&program).unwrap();
+
+        // Expected TACKY:
+        // TODO
+        assert_eq!(
+            emit_program(&program, &symbol_table).unwrap(),
+            Program {
+                top_level: vec![
+                    TopLevel::Function(Function {
+                        name: "main".into(),
+                        global: true,
+                        params: vec![],
+                        body: vec![
+                            Instruction::Return(Val::Constant(0)),
+                            // Default Return(0)
+                            Instruction::Return(Val::Constant(0)),
+                        ],
+                    }),
+                    // a is extern
+                    TopLevel::StaticVariable {
+                        name: "b".into(),
+                        global: false, // static, so not globally visible
+                        init: Some(42),
+                    },
+                    TopLevel::StaticVariable {
+                        name: "c".into(),
+                        global: true,
+                        init: Some(0), // tentative, set to zero
+                    },
+                    TopLevel::StaticVariable {
+                        name: "d".into(),
+                        global: false,
+                        init: Some(77),
+                    },
+                    // e is extern
                 ]
             }
         );

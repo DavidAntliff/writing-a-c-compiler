@@ -43,8 +43,15 @@ pub(crate) fn parse(tacky: &tacky::Program) -> Result<asm::Program, CodegenError
 
 fn pass1(program: &tacky::Program) -> asm::Program {
     let mut function_definitions = vec![];
-    for function in &program.function_definitions {
-        function_definitions.push(function_definition(function));
+    for item in &program.top_level {
+        match item {
+            tacky::TopLevel::Function(function) => {
+                function_definitions.push(function_definition(function));
+            }
+            tacky::TopLevel::StaticVariable { .. } => {
+                todo!()
+            }
+        }
     }
     asm::Program {
         function_definitions,
@@ -74,7 +81,7 @@ impl From<&tacky::Identifier> for asm::Identifier {
     }
 }
 
-fn function_definition(function: &tacky::FunctionDefinition) -> asm::Function {
+fn function_definition(function: &tacky::Function) -> asm::Function {
     let mut instructions = vec![];
 
     gen_parameters(&function.params, &mut instructions);
@@ -788,11 +795,12 @@ mod tests {
     #[test]
     fn test_pass1_return_constant() {
         let tacky_program = tacky::Program {
-            function_definitions: vec![tacky::FunctionDefinition {
+            top_level: vec![tacky::TopLevel::Function(tacky::Function {
                 name: "main".into(),
+                global: true,
                 params: vec![],
                 body: vec![Instruction::Return(Val::Constant(2))],
-            }],
+            })],
         };
 
         let ast = pass1(&tacky_program);
@@ -818,8 +826,9 @@ mod tests {
     #[test]
     fn test_pass1_return_unary() {
         let tacky_program = tacky::Program {
-            function_definitions: vec![tacky::FunctionDefinition {
+            top_level: vec![tacky::TopLevel::Function(tacky::Function {
                 name: "main".into(),
+                global: true,
                 params: vec![],
                 body: vec![
                     Instruction::Unary {
@@ -829,7 +838,7 @@ mod tests {
                     },
                     Instruction::Return(Val::Var("tmp.0".into())),
                 ],
-            }],
+            })],
         };
 
         let ast = pass1(&tacky_program);
@@ -863,8 +872,9 @@ mod tests {
     #[test]
     fn test_pass1_binary_add() {
         let tacky_program = tacky::Program {
-            function_definitions: vec![tacky::FunctionDefinition {
+            top_level: vec![tacky::TopLevel::Function(tacky::Function {
                 name: "main".into(),
+                global: true,
                 params: vec![],
                 body: vec![Instruction::Binary {
                     op: BinaryOperator::Add,
@@ -872,7 +882,7 @@ mod tests {
                     src2: Val::Constant(3),
                     dst: Val::Var("tmp.0".into()),
                 }],
-            }],
+            })],
         };
 
         let ast = pass1(&tacky_program);
@@ -902,8 +912,9 @@ mod tests {
     #[test]
     fn test_pass1_binary_remainder() {
         let tacky_program = tacky::Program {
-            function_definitions: vec![tacky::FunctionDefinition {
+            top_level: vec![tacky::TopLevel::Function(tacky::Function {
                 name: "main".into(),
+                global: true,
                 params: vec![],
                 body: vec![Instruction::Binary {
                     op: BinaryOperator::Remainder,
@@ -911,7 +922,7 @@ mod tests {
                     src2: Val::Constant(3),
                     dst: Val::Var("tmp.0".into()),
                 }],
-            }],
+            })],
         };
 
         let ast = pass1(&tacky_program);
@@ -942,8 +953,9 @@ mod tests {
     #[test]
     fn test_pass1_binary_bitwise_xor() {
         let tacky_program = tacky::Program {
-            function_definitions: vec![tacky::FunctionDefinition {
+            top_level: vec![tacky::TopLevel::Function(tacky::Function {
                 name: "main".into(),
+                global: true,
                 params: vec![],
                 body: vec![Instruction::Binary {
                     op: BinaryOperator::BitXor,
@@ -951,7 +963,7 @@ mod tests {
                     src2: Val::Constant(3),
                     dst: Val::Var("tmp.0".into()),
                 }],
-            }],
+            })],
         };
 
         let ast = pass1(&tacky_program);
@@ -1544,11 +1556,12 @@ mod tests {
         //     return param;
         // }
         let program = tacky::Program {
-            function_definitions: vec![tacky::FunctionDefinition {
+            top_level: vec![tacky::TopLevel::Function(tacky::Function {
                 name: "simple".into(),
+                global: true,
                 params: vec!["param".into()],
                 body: vec![Instruction::Return(Val::Var("param".into()))],
-            }],
+            })],
         };
 
         let ast = pass1(&program);
@@ -1579,8 +1592,9 @@ mod tests {
     fn test_function_with_eight_parameters() {
         // First 6 parameters are passed in registers, the rest on the stack
         let program = tacky::Program {
-            function_definitions: vec![tacky::FunctionDefinition {
+            top_level: vec![tacky::TopLevel::Function(tacky::Function {
                 name: "eight".into(),
+                global: true,
                 params: vec![
                     "a".into(),
                     "b".into(),
@@ -1592,7 +1606,7 @@ mod tests {
                     "h".into(),
                 ],
                 body: vec![Instruction::Return(Val::Constant(0))],
-            }],
+            })],
         };
 
         let ast = pass1(&program);

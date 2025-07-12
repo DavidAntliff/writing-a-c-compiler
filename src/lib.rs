@@ -103,7 +103,7 @@ pub fn do_the_thing(
         return Ok(());
     }
 
-    let tacky = tacky::emit_program(&ast)?;
+    let tacky = tacky::emit_program(&ast, &symbol_table)?;
 
     //log::debug!("TACKY: {tacky:#?}");
 
@@ -159,8 +159,8 @@ mod tests {
     fn lex_parse_analyse_and_codegen(input: &str) -> Result<ast_asm::Program, Error> {
         let lexed = lexer::lex(input)?;
         let mut ast = parser::parse(&lexed)?;
-        semantics::analyse(&mut ast)?;
-        let tacky = tacky::emit_program(&ast)?;
+        let symbol_table = semantics::analyse(&mut ast)?;
+        let tacky = tacky::emit_program(&ast, &symbol_table)?;
         let asm = codegen::parse(&tacky)?;
         Ok(asm)
     }
