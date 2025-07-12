@@ -12,11 +12,29 @@ pub enum Error {
     #[error("Undeclared variable: {0}")]
     UndeclaredVariable(Identifier),
 
-    #[error("Duplicate declaration: {0}")]
+    #[error("Duplicate variable declaration: {0}")]
     DuplicateVariableDeclaration(Identifier),
 
-    #[error("Conflicting declaration: {0}")]
+    #[error("Conflicting variable declaration: {0}")]
     ConflictingVariableDeclaration(Identifier),
+
+    #[error("Conflicting variable linkage: {0}")]
+    ConflictingVariableLinkage(Identifier),
+
+    #[error("Conflicting file-scope variable definitions: {0}")]
+    ConflictingFileScopeVariableDefinitions(Identifier),
+
+    #[error("Non-constant variable initialiser: {0}")]
+    NonConstantInitialiser(Identifier),
+
+    #[error("Non-constant local static variable initialiser: {0}")]
+    NonConstantLocalStaticInitialiser(Identifier),
+
+    #[error("Function redeclared as variable: {0}")]
+    FunctionRedeclaredAsVariable(Identifier),
+
+    #[error("Initialiser on local extern variable declaration: {0}")]
+    InitialiserOnLocalExternVariableDeclaration(Identifier),
 
     #[error("Invalid lvalue")]
     InvalidLValue,
@@ -59,6 +77,9 @@ pub enum Error {
 
     #[error("Multiple function definitions: {0}")]
     MultipleDefinitions(Identifier),
+
+    #[error("Static function declaration follows non-static: {0}")]
+    StaticFunctionDeclarationFollowsNonStatic(Identifier),
 
     #[error("{0}")]
     Message(String),
@@ -658,9 +679,26 @@ pub(crate) enum Type {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub(crate) enum IdentifierAttrs {
+    /// Functions
+    Fun { defined: bool, global: bool },
+    /// Variables with static storage duration
+    Static { init: InitialValue, global: bool },
+    /// Function parameters and variables with automatic storage duration
+    Local,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum InitialValue {
+    Tentative,
+    Initial(usize),
+    NoInitialiser,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct SymbolTableEntry {
     pub(crate) type_: Type,
-    pub(crate) defined: bool,
+    pub(crate) attrs: IdentifierAttrs,
 }
 
 #[derive(Debug)]
@@ -675,18 +713,23 @@ impl SymbolTable {
         }
     }
 
-    fn add(&mut self, identifier: Identifier, type_: Type, defined: bool) {
-        self.table
-            .insert(identifier, SymbolTableEntry { type_, defined });
+    fn add(&mut self, identifier: Identifier, type_: Type, identifier_attrs: IdentifierAttrs) {
+        self.table.insert(
+            identifier,
+            SymbolTableEntry {
+                type_,
+                attrs: identifier_attrs,
+            },
+        );
     }
 
     pub(crate) fn get(&self, identifier: &Identifier) -> Option<&SymbolTableEntry> {
         self.table.get(identifier)
     }
 
-    fn contains_key(&self, identifier: &Identifier) -> bool {
-        self.table.contains_key(identifier)
-    }
+    // fn contains_key(&self, identifier: &Identifier) -> bool {
+    //     self.table.contains_key(identifier)
+    // }
 }
 
 fn type_checking(program: &Program) -> Result<SymbolTable, Error> {
@@ -697,8 +740,8 @@ fn type_checking(program: &Program) -> Result<SymbolTable, Error> {
             Declaration::FunDecl(fun_decl) => {
                 typecheck_function_declaration(fun_decl, &mut symbol_table)?;
             }
-            Declaration::VarDecl(_) => {
-                // TODO
+            Declaration::VarDecl(var_decl) => {
+                typecheck_file_scope_variable_declaration(var_decl, &mut symbol_table)?;
             }
         }
     }
@@ -706,60 +749,180 @@ fn type_checking(program: &Program) -> Result<SymbolTable, Error> {
     Ok(symbol_table)
 }
 
-fn typecheck_variable_declaration(
-    var_decl: &VarDecl,
+fn typecheck_file_scope_variable_declaration(
+    decl: &VarDecl,
     symbol_table: &mut SymbolTable,
 ) -> Result<(), Error> {
-    // Variable names are already unique at this point
-    assert!(
-        !symbol_table.contains_key(&var_decl.name),
-        "Variable already declared"
-    );
+    // Determine the variable's initial value
+    let mut initial_value = match &decl.init {
+        Some(Expression::Constant(i)) => InitialValue::Initial(*i),
+        None => {
+            if decl.storage_class == Some(StorageClass::Extern) {
+                InitialValue::NoInitialiser
+            } else {
+                InitialValue::Tentative
+            }
+        }
+        _ => {
+            return Err(Error::NonConstantInitialiser(decl.name.clone()));
+        }
+    };
 
-    symbol_table.add(
-        var_decl.name.clone(),
-        Type::Int, // assuming all variables are of type Int for simplicity
-        var_decl.init.is_some(),
-    );
-    if let Some(init) = &var_decl.init {
-        typecheck_exp(init, symbol_table)?;
+    // Determine if tentatively globally visible, or static
+    let mut global = decl.storage_class != Some(StorageClass::Static);
+
+    // Consider prior declarations, disgreesments result in errors
+    if let Some(old_decl) = symbol_table.get(&decl.name) {
+        if old_decl.type_ != Type::Int {
+            return Err(Error::FunctionRedeclaredAsVariable(decl.name.clone()));
+        }
+
+        match &old_decl.attrs {
+            IdentifierAttrs::Static {
+                init,
+                global: _global,
+            } => {
+                // Extern solidifies any tentative declaration
+                if decl.storage_class == Some(StorageClass::Extern) {
+                    global = *_global;
+                } else if *_global != global {
+                    return Err(Error::ConflictingVariableLinkage(decl.name.clone()));
+                }
+
+                // Account for explicit initialisers
+                if matches!(init, InitialValue::Initial(_)) {
+                    if matches!(initial_value, InitialValue::Initial(_)) {
+                        return Err(Error::ConflictingFileScopeVariableDefinitions(
+                            decl.name.clone(),
+                        ));
+                    } else {
+                        initial_value = init.clone();
+                    }
+                } else if !matches!(initial_value, InitialValue::Initial(_))
+                    && matches!(init, InitialValue::Tentative)
+                {
+                    initial_value = InitialValue::Tentative;
+                }
+            }
+            _ => panic!("File-scope variable declaration should have static storage duration"),
+        }
+    }
+
+    // Add to symbol table
+    let attrs = IdentifierAttrs::Static {
+        init: initial_value,
+        global,
+    };
+    symbol_table.add(decl.name.clone(), Type::Int, attrs);
+    Ok(())
+}
+
+fn typecheck_local_variable_declaration(
+    decl: &VarDecl,
+    symbol_table: &mut SymbolTable,
+) -> Result<(), Error> {
+    match decl.storage_class {
+        Some(StorageClass::Extern) => {
+            // Extern variables cannot have initialisers
+            if decl.init.is_some() {
+                return Err(Error::InitialiserOnLocalExternVariableDeclaration(
+                    decl.name.clone(),
+                ));
+            }
+            if let Some(old_decl) = symbol_table.get(&decl.name) {
+                if old_decl.type_ != Type::Int {
+                    return Err(Error::FunctionRedeclaredAsVariable(decl.name.clone()));
+                }
+            } else {
+                symbol_table.add(
+                    decl.name.clone(),
+                    Type::Int,
+                    IdentifierAttrs::Static {
+                        init: InitialValue::NoInitialiser,
+                        global: true,
+                    },
+                );
+            }
+        }
+        Some(StorageClass::Static) => {
+            // Static variables have no linkage, and must have an initialiser otherwise zero.
+            let initial_value = match &decl.init {
+                Some(Expression::Constant(i)) => InitialValue::Initial(*i),
+                None => InitialValue::Initial(0),
+                _ => {
+                    return Err(Error::NonConstantLocalStaticInitialiser(decl.name.clone()));
+                }
+            };
+            symbol_table.add(
+                decl.name.clone(),
+                Type::Int,
+                IdentifierAttrs::Static {
+                    init: initial_value,
+                    global: false,
+                },
+            );
+        }
+        None => {
+            // Automatic variable
+            symbol_table.add(decl.name.clone(), Type::Int, IdentifierAttrs::Local);
+            if let Some(init) = &decl.init {
+                typecheck_exp(init, symbol_table)?;
+            }
+        }
     }
 
     Ok(())
 }
 
 fn typecheck_function_declaration(
-    function_decl: &FunDecl,
+    decl: &FunDecl,
     symbol_table: &mut SymbolTable,
 ) -> Result<(), Error> {
     let fun_type = Type::Function {
-        param_count: function_decl.params.len(),
+        param_count: decl.params.len(),
     };
-    let has_body = function_decl.body.is_some();
+    let has_body = decl.body.is_some();
     let mut already_defined = false;
 
-    if symbol_table.contains_key(&function_decl.name) {
-        let existing_type = symbol_table.get(&function_decl.name).expect("should exist");
-        if existing_type.type_ != fun_type {
-            return Err(Error::IncompatibleFunctionDeclaration(
-                function_decl.name.clone(),
-            ));
+    // Linkage is internal if static, or tentatively external
+    let mut global = decl.storage_class != Some(StorageClass::Static);
+
+    if let Some(old_decl) = symbol_table.get(&decl.name) {
+        if old_decl.type_ != fun_type {
+            return Err(Error::IncompatibleFunctionDeclaration(decl.name.clone()));
         }
-        already_defined = existing_type.defined;
-        if already_defined && has_body {
-            return Err(Error::MultipleDefinitions(function_decl.name.clone()));
+
+        match old_decl.attrs {
+            IdentifierAttrs::Fun {
+                defined,
+                global: global_,
+            } => {
+                already_defined = defined;
+                if already_defined && has_body {
+                    return Err(Error::MultipleDefinitions(decl.name.clone()));
+                }
+
+                if global_ && decl.storage_class == Some(StorageClass::Static) {
+                    return Err(Error::StaticFunctionDeclarationFollowsNonStatic(
+                        decl.name.clone(),
+                    ));
+                }
+                global = global_;
+            }
+            _ => panic!("Function declaration should have function attributes"),
         }
     }
 
-    symbol_table.add(
-        function_decl.name.clone(),
-        fun_type,
-        already_defined || has_body,
-    );
+    let attrs = IdentifierAttrs::Fun {
+        defined: already_defined || has_body,
+        global,
+    };
 
-    if let Some(body) = &function_decl.body {
-        for param in function_decl.params.iter() {
-            symbol_table.add(param.clone(), Type::Int, false);
+    symbol_table.add(decl.name.clone(), fun_type, attrs);
+
+    if let Some(body) = &decl.body {
+        for param in decl.params.iter() {
+            symbol_table.add(param.clone(), Type::Int, IdentifierAttrs::Local);
         }
         typecheck_block(body, symbol_table)?;
     }
@@ -828,7 +991,13 @@ fn typecheck_statement(statement: &Statement, symbol_table: &mut SymbolTable) ->
             loop_label: _,
         } => {
             if let ForInit::InitDecl(var_decl) = init {
-                typecheck_variable_declaration(var_decl, symbol_table)?;
+                // Storage-class specifiers not allowed in for-init-decls
+                if var_decl.storage_class.is_some() {
+                    return Err(Error::InvalidStorageClass(
+                        var_decl.storage_class.clone().unwrap(),
+                    ));
+                }
+                typecheck_local_variable_declaration(var_decl, symbol_table)?;
             } else if let ForInit::InitExp(Some(exp)) = init {
                 typecheck_exp(exp, symbol_table)?;
             }
@@ -851,7 +1020,7 @@ fn typecheck_declaration(
 ) -> Result<(), Error> {
     match declaration {
         Declaration::VarDecl(var_decl) => {
-            typecheck_variable_declaration(var_decl, symbol_table)?;
+            typecheck_local_variable_declaration(var_decl, symbol_table)?;
         }
         Declaration::FunDecl(fun_decl) => {
             typecheck_function_declaration(fun_decl, symbol_table)?;
