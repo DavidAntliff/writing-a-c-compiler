@@ -1,16 +1,9 @@
 //! AST for x86_64 assembly
 //!
 //! ASDL:
-//!   program = Program(function_definition*)
-//!   function_definition = Function(identifier name,
-//!                                  [ Mov(Reg(DI), param1),
-//!                                    Mov(Reg(SI), param2),
-//!                                    ...
-//!                                    Mov(Stack(16), param7),
-//!                                    MOV(Stack(24), param8),
-//!                                    ...
-//!                                  ] +
-//!                                  instruction* instructions)
+//!   program = Program(top_level*)
+//!   top_level = Function(identifier name, bool global, instruction* instructions)
+//!               | StaticVariable(identifier name, bool global, int init)
 //!   instruction = Mov(operand src, operand dst)
 //!               | Unary(unary_operator, operand)
 //!               | Binary(binary_operator, operand, operand)
@@ -32,6 +25,7 @@
 //!           | Reg(reg)
 //!           | Pseudo(identifier)
 //!           | Stack(int)
+//!           | Data(identifier)
 //!   cond_code = E | NE | L | LE | G | GE
 //!   reg = AX | CX | DX | DI | SI | R8 | R9 | R10 | R11
 //!
@@ -54,12 +48,23 @@ pub(crate) const ABI_STACK_ALIGNMENT: usize = 16; // 16 byte alignment for stack
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Program {
-    pub(crate) function_definitions: Vec<Function>,
+    pub(crate) top_level: Vec<TopLevel>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum TopLevel {
+    Function(Function),
+    StaticVariable {
+        name: Identifier,
+        global: bool,
+        init: usize,
+    },
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Function {
     pub(crate) name: Identifier,
+    pub(crate) global: bool,
     pub(crate) instructions: Vec<Instruction>,
     pub(crate) stack_size: Option<usize>, // bytes
 }
@@ -250,6 +255,7 @@ pub(crate) enum Operand {
     Pseudo(Identifier),
     /// Stack offset in bytes
     Stack(Offset),
+    Data(Identifier),
 }
 
 impl Display for Operand {
@@ -259,6 +265,7 @@ impl Display for Operand {
             Operand::Reg(reg) => write!(f, "%{reg}"), // TODO: needs width consideration
             Operand::Pseudo(_) => panic!("Pseudo operands should not be emitted"),
             Operand::Stack(n) => write!(f, "{n}(%rbp)"),
+            Operand::Data(id) => todo!(),
         }
     }
 }

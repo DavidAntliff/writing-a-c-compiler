@@ -49,7 +49,7 @@ pub(crate) enum TopLevel {
     StaticVariable {
         name: Identifier,
         global: bool,
-        init: Option<usize>,
+        init: usize,
     },
 }
 
@@ -174,12 +174,12 @@ fn convert_symbols_to_tacky(symbol_table: &SymbolTable) -> Result<Vec<TopLevel>,
                 InitialValue::Initial(i) => tacky_defs.push(StaticVariable {
                     name: name.into(),
                     global: *global,
-                    init: Some(*i),
+                    init: *i,
                 }),
                 InitialValue::Tentative => tacky_defs.push(StaticVariable {
                     name: name.into(),
                     global: *global,
-                    init: Some(0),
+                    init: 0,
                 }),
                 InitialValue::NoInitialiser => (),
             }
@@ -1550,11 +1550,12 @@ mod tests {
 
     #[test]
     fn test_parse_program_local_variables() {
-        // Listing 5-13, page 111
+        // Listing 5-13, page 111 (modified)
         // int main(void) {
         //     int b;
         //     int a = 10 + 1;
         //     b = a * 2;
+        //     int c = 42;  // add a local variable with constant init
         //     return b;
         // }
         let program = ast_c::Program {
@@ -1590,6 +1591,12 @@ mod tests {
                                 )),
                             ),
                         )),
+                        // int c = 42;
+                        ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
+                            name: "c.100".into(),
+                            init: Some(ast_c::Expression::Constant(42)),
+                            storage_class: None,
+                        })),
                         // return b;
                         ast_c::BlockItem::S(ast_c::Statement::Return(ast_c::Expression::Var(
                             "b.98".into(),
@@ -1606,6 +1613,8 @@ mod tests {
         //   a.1 = tmp.2
         //   tmp.3 = a.1 * 2
         //   b.0 = tmp.3
+        //   tmp.4 = 42
+        //   c.0 = tmp.4
         //   Return(b.0)
         assert_eq!(
             emit_program(&program, &symbol_table).unwrap(),
@@ -1639,6 +1648,11 @@ mod tests {
                         Instruction::Copy {
                             src: Val::Var("tmp.1".into()),
                             dst: Val::Var("b.98".into()),
+                        },
+                        // int c = 42;
+                        Instruction::Copy {
+                            src: Val::Constant(42),
+                            dst: Val::Var("c.100".into()),
                         },
                         // return b;
                         Instruction::Return(Val::Var("b.98".into())),
@@ -2064,17 +2078,17 @@ mod tests {
                     TopLevel::StaticVariable {
                         name: "b".into(),
                         global: false, // static, so not globally visible
-                        init: Some(42),
+                        init: 42,
                     },
                     TopLevel::StaticVariable {
                         name: "c".into(),
                         global: true,
-                        init: Some(0), // tentative, set to zero
+                        init: 0, // tentative, set to zero
                     },
                     TopLevel::StaticVariable {
                         name: "d".into(),
                         global: false,
-                        init: Some(77),
+                        init: 77,
                     },
                     // e is extern
                 ]

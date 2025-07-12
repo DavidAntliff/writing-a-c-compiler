@@ -1,5 +1,6 @@
 use crate::ast_asm as asm;
 use crate::ast_asm::ABI_STACK_ALIGNMENT;
+use crate::semantics::{IdentifierAttrs, SymbolTable};
 use crate::tacky;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -23,13 +24,16 @@ const CALLING_CONVENTION_REGISTERS: [asm::Reg; 6] = [
     asm::Reg::R9, // Sixth argument
 ];
 
-pub(crate) fn parse(tacky: &tacky::Program) -> Result<asm::Program, CodegenError> {
+pub(crate) fn parse(
+    tacky: &tacky::Program,
+    symbol_table: &SymbolTable,
+) -> Result<asm::Program, CodegenError> {
     // Pass 1 - convert TACKY AST to ASM AST, using pseudo registers for variables
     let ast = pass1(tacky);
     //log::debug!("Codegen PASS 1: {ast:#?}");
 
     // Pass 2 - replace pseudo registers with Stack operands
-    let ast = pass2(ast)?;
+    let ast = pass2(ast, symbol_table)?;
     //log::debug!("Codegen PASS 2: {ast:#?}");
 
     // Pass 3:
@@ -42,20 +46,22 @@ pub(crate) fn parse(tacky: &tacky::Program) -> Result<asm::Program, CodegenError
 }
 
 fn pass1(program: &tacky::Program) -> asm::Program {
-    let mut function_definitions = vec![];
+    let mut top_level = vec![];
     for item in &program.top_level {
         match item {
             tacky::TopLevel::Function(function) => {
-                function_definitions.push(function_definition(function));
+                top_level.push(asm::TopLevel::Function(function_definition(function)));
             }
-            tacky::TopLevel::StaticVariable { .. } => {
-                todo!()
+            tacky::TopLevel::StaticVariable { name, global, init } => {
+                top_level.push(asm::TopLevel::StaticVariable {
+                    name: name.into(),
+                    global: *global,
+                    init: *init,
+                })
             }
         }
     }
-    asm::Program {
-        function_definitions,
-    }
+    asm::Program { top_level }
 }
 
 impl From<&tacky::Val> for asm::Operand {
@@ -93,6 +99,7 @@ fn function_definition(function: &tacky::Function) -> asm::Function {
 
     asm::Function {
         name: (&function.name).into(),
+        global: function.global,
         instructions,
         stack_size: None,
     }
@@ -356,7 +363,7 @@ fn gen_function_call(
     }
 
     // Emit call instruction
-    instructions.push(asm::Instruction::Call(asm::Identifier(name.0.clone())));
+    instructions.push(asm::Instruction::Call(name.into()));
 
     // Adjust stack pointer after call
     let bytes_to_remove = asm::ABI_PARAM_SIZE * stack_args.len() + stack_padding;
@@ -372,16 +379,18 @@ fn gen_function_call(
     });
 }
 
-struct PseudoReplacer {
+struct PseudoReplacer<'a> {
     map: HashMap<asm::Identifier, asm::Offset>,
     size: usize,
+    symbol_table: &'a SymbolTable,
 }
 
-impl PseudoReplacer {
-    fn new() -> Self {
+impl<'a> PseudoReplacer<'a> {
+    fn new(symbol_table: &'a SymbolTable) -> Self {
         PseudoReplacer {
             map: HashMap::new(),
             size: 0,
+            symbol_table,
         }
     }
 
@@ -389,6 +398,11 @@ impl PseudoReplacer {
         if let asm::Operand::Pseudo(identifier) = operand {
             if let Some(offset) = self.map.get(identifier) {
                 *operand = asm::Operand::Stack(*offset);
+            } else if let Some(symbol) = self.symbol_table.get(&identifier.0)
+                && let IdentifierAttrs::Static { .. } = symbol.attrs
+            {
+                // Static variables are not replaced with stack slots
+                *operand = asm::Operand::Data(identifier.clone());
             } else {
                 self.size += asm::STACK_SLOT_SIZE;
                 let offset = asm::Offset(-(self.size as isize));
@@ -405,217 +419,231 @@ impl PseudoReplacer {
 
 /// Replace each Pseudo operand with a Stack operand
 /// and return the final size of the stack frame.
-fn pass2(mut ast: asm::Program) -> Result<asm::Program, CodegenError> {
-    for function_definition in &mut ast.function_definitions {
-        let mut replacer = PseudoReplacer::new();
-        function_definition
-            .instructions
-            .iter_mut()
-            .for_each(|instruction| match instruction {
-                asm::Instruction::Mov { src, dst } => {
-                    replacer.replace(src);
-                    replacer.replace(dst);
-                }
-                asm::Instruction::Unary { op: _, dst } => {
-                    replacer.replace(dst);
-                }
-                asm::Instruction::Binary { op: _, src, dst } => {
-                    replacer.replace(src);
-                    replacer.replace(dst);
-                }
-                asm::Instruction::Idiv(src) => {
-                    replacer.replace(src);
-                }
-                asm::Instruction::Cmp { src1, src2 } => {
-                    replacer.replace(src1);
-                    replacer.replace(src2);
-                }
-                asm::Instruction::SetCC { cc: _, dst } => {
-                    replacer.replace(dst);
-                }
-                asm::Instruction::Push(op) => {
-                    replacer.replace(op);
-                }
+fn pass2(mut ast: asm::Program, symbol_table: &SymbolTable) -> Result<asm::Program, CodegenError> {
+    for definition in &mut ast.top_level {
+        match definition {
+            asm::TopLevel::Function(function_definition) => {
+                let mut replacer = PseudoReplacer::new(symbol_table);
+                function_definition.instructions.iter_mut().for_each(
+                    |instruction| match instruction {
+                        asm::Instruction::Mov { src, dst } => {
+                            replacer.replace(src);
+                            replacer.replace(dst);
+                        }
+                        asm::Instruction::Unary { op: _, dst } => {
+                            replacer.replace(dst);
+                        }
+                        asm::Instruction::Binary { op: _, src, dst } => {
+                            replacer.replace(src);
+                            replacer.replace(dst);
+                        }
+                        asm::Instruction::Idiv(src) => {
+                            replacer.replace(src);
+                        }
+                        asm::Instruction::Cmp { src1, src2 } => {
+                            replacer.replace(src1);
+                            replacer.replace(src2);
+                        }
+                        asm::Instruction::SetCC { cc: _, dst } => {
+                            replacer.replace(dst);
+                        }
+                        asm::Instruction::Push(op) => {
+                            replacer.replace(op);
+                        }
 
-                // No action required for the remaining instructions:
-                asm::Instruction::Cdq
-                | asm::Instruction::Jmp { .. }
-                | asm::Instruction::JmpCC { .. }
-                | asm::Instruction::Label(_)
-                | asm::Instruction::AllocateStack(_)
-                | asm::Instruction::Ret
-                | asm::Instruction::DeallocateStack(_)
-                | asm::Instruction::Call(_) => {}
-            });
+                        // No action required for the remaining instructions:
+                        asm::Instruction::Cdq
+                        | asm::Instruction::Jmp { .. }
+                        | asm::Instruction::JmpCC { .. }
+                        | asm::Instruction::Label(_)
+                        | asm::Instruction::AllocateStack(_)
+                        | asm::Instruction::Ret
+                        | asm::Instruction::DeallocateStack(_)
+                        | asm::Instruction::Call(_) => {}
+                    },
+                );
 
-        // Extend stack size to be a multiple of 16 bytes
-        let stack_size = replacer.size().div_ceil(ABI_STACK_ALIGNMENT) * ABI_STACK_ALIGNMENT;
-        function_definition.stack_size = Some(stack_size);
+                // Extend stack size to be a multiple of 16 bytes
+                let stack_size =
+                    replacer.size().div_ceil(ABI_STACK_ALIGNMENT) * ABI_STACK_ALIGNMENT;
+                function_definition.stack_size = Some(stack_size);
+            }
+            asm::TopLevel::StaticVariable { .. } => {
+                // pass
+            }
+        }
     }
     Ok(ast)
 }
 
 fn pass3(ast: &asm::Program) -> Result<asm::Program, CodegenError> {
-    let mut function_definitions = vec![];
+    let mut top_level = vec![];
 
-    for function_definition in &ast.function_definitions {
-        let stack_size = function_definition
-            .stack_size
-            .expect("Stack size must be set in pass 2");
-        assert_eq!(
-            stack_size % ABI_STACK_ALIGNMENT,
-            0,
-            "Stack size must be a multiple of {ABI_STACK_ALIGNMENT} bytes"
-        );
+    for definition in &ast.top_level {
+        match definition {
+            asm::TopLevel::Function(function_definition) => {
+                let stack_size = function_definition
+                    .stack_size
+                    .expect("Stack size must be set in pass 2");
+                assert_eq!(
+                    stack_size % ABI_STACK_ALIGNMENT,
+                    0,
+                    "Stack size must be a multiple of {ABI_STACK_ALIGNMENT} bytes"
+                );
 
-        let mut instructions = Vec::with_capacity(function_definition.instructions.len() + 1);
+                let mut instructions =
+                    Vec::with_capacity(function_definition.instructions.len() + 1);
 
-        // Insert AllocateStack instruction at the beginning
-        instructions.push(asm::Instruction::AllocateStack(stack_size));
+                // Insert AllocateStack instruction at the beginning
+                instructions.push(asm::Instruction::AllocateStack(stack_size));
 
-        // Rewrite invalid MOV instructions to pass through the scratch register
-        for instruction in &function_definition.instructions {
-            match instruction {
-                // MOV instructions with two address operands are not allowed
-                //   -> copy through scratch register
-                asm::Instruction::Mov {
-                    src: asm::Operand::Stack(src),
-                    dst: asm::Operand::Stack(dst),
-                } => {
-                    instructions.push(asm::Instruction::Mov {
-                        src: asm::Operand::Stack(*src),
-                        dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
-                    });
-                    instructions.push(asm::Instruction::Mov {
-                        src: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
-                        dst: asm::Operand::Stack(*dst),
-                    });
+                // Rewrite invalid MOV instructions to pass through the scratch register
+                for instruction in &function_definition.instructions {
+                    match instruction {
+                        // MOV instructions with two address operands are not allowed
+                        //   -> copy through scratch register
+                        asm::Instruction::Mov {
+                            src: src @ (asm::Operand::Stack(_) | asm::Operand::Data(_)),
+                            dst: dst @ (asm::Operand::Stack(_) | asm::Operand::Data(_)),
+                        } => {
+                            instructions.push(asm::Instruction::Mov {
+                                src: src.clone(),
+                                dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                            });
+                            instructions.push(asm::Instruction::Mov {
+                                src: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                                dst: dst.clone(),
+                            });
+                        }
+
+                        // IDIV instructions with a constant operand are not allowed
+                        //   -> copy to scratch register first
+                        asm::Instruction::Idiv(src @ asm::Operand::Imm(_)) => {
+                            instructions.push(asm::Instruction::Mov {
+                                src: src.clone(),
+                                dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                            });
+                            instructions.push(asm::Instruction::Idiv(asm::Operand::Reg(
+                                SRC_SCRATCH_REGISTER,
+                            )));
+                        }
+
+                        // ADD/SUB instructions with two address operands are not allowed
+                        //   -> copy through scratch register
+                        // Includes binary bitwise operators.
+                        asm::Instruction::Binary {
+                            op,
+                            src: src @ (asm::Operand::Stack(_) | asm::Operand::Data(_)),
+                            dst: dst @ (asm::Operand::Stack(_) | asm::Operand::Data(_)),
+                        } if *op == asm::BinaryOperator::Add
+                            || *op == asm::BinaryOperator::Sub
+                            || *op == asm::BinaryOperator::BitAnd
+                            || *op == asm::BinaryOperator::BitOr
+                            || *op == asm::BinaryOperator::BitXor =>
+                        {
+                            instructions.push(asm::Instruction::Mov {
+                                src: src.clone(),
+                                dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                            });
+                            instructions.push(asm::Instruction::Binary {
+                                op: op.clone(),
+                                src: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                                dst: dst.clone(),
+                            });
+                        }
+
+                        // IMUL instructions with a memory address as destination are not allowed
+                        //   -> copy destination to scratch register first
+                        asm::Instruction::Binary {
+                            op,
+                            src,
+                            dst: dst @ (asm::Operand::Stack(_) | asm::Operand::Data(_)),
+                        } if *op == asm::BinaryOperator::Mult => {
+                            instructions.push(asm::Instruction::Mov {
+                                src: dst.clone(),
+                                dst: asm::Operand::Reg(DST_SCRATCH_REGISTER),
+                            });
+                            instructions.push(asm::Instruction::Binary {
+                                op: op.clone(),
+                                src: src.clone(),
+                                dst: asm::Operand::Reg(DST_SCRATCH_REGISTER),
+                            });
+                            instructions.push(asm::Instruction::Mov {
+                                src: asm::Operand::Reg(DST_SCRATCH_REGISTER),
+                                dst: dst.clone(),
+                            });
+                        }
+
+                        // SAL/SAR instructions with a memory address as src are not allowed
+                        //   -> copy source to CX register first
+                        asm::Instruction::Binary {
+                            op,
+                            src: src @ (asm::Operand::Stack(_) | asm::Operand::Data(_)),
+                            dst,
+                        } if *op == asm::BinaryOperator::BitShiftLeft
+                            || *op == asm::BinaryOperator::BitShiftRight =>
+                        {
+                            instructions.push(asm::Instruction::Mov {
+                                src: src.clone(),
+                                dst: asm::Operand::Reg(asm::Reg::CX),
+                            });
+                            instructions.push(asm::Instruction::Binary {
+                                op: op.clone(),
+                                src: asm::Operand::Reg(asm::Reg::CX),
+                                dst: dst.clone(),
+                            });
+                        }
+
+                        // CMP instructions with two address operands are not allowed
+                        //   -> copy through scratch register
+                        asm::Instruction::Cmp {
+                            src1: src1 @ (asm::Operand::Stack(_) | asm::Operand::Data(_)),
+                            src2: src2 @ (asm::Operand::Stack(_) | asm::Operand::Data(_)),
+                        } => {
+                            instructions.push(asm::Instruction::Mov {
+                                src: src1.clone(),
+                                dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                            });
+                            instructions.push(asm::Instruction::Cmp {
+                                src1: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                                src2: src2.clone(),
+                            });
+                        }
+
+                        // CMP instructions with a constant second operand are not allowed
+                        //   -> copy through scratch register
+                        asm::Instruction::Cmp {
+                            src1,
+                            src2: src2 @ asm::Operand::Imm(_),
+                        } => {
+                            instructions.push(asm::Instruction::Mov {
+                                src: src2.clone(),
+                                dst: asm::Operand::Reg(DST_SCRATCH_REGISTER),
+                            });
+                            instructions.push(asm::Instruction::Cmp {
+                                src1: src1.clone(),
+                                src2: asm::Operand::Reg(DST_SCRATCH_REGISTER),
+                            });
+                        }
+
+                        _ => instructions.push(instruction.clone()),
+                    }
                 }
 
-                // IDIV instructions with a constant operand are not allowed
-                //   -> copy to scratch register first
-                asm::Instruction::Idiv(src @ asm::Operand::Imm(_)) => {
-                    instructions.push(asm::Instruction::Mov {
-                        src: src.clone(),
-                        dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
-                    });
-                    instructions.push(asm::Instruction::Idiv(asm::Operand::Reg(
-                        SRC_SCRATCH_REGISTER,
-                    )));
-                }
-
-                // ADD/SUB instructions with two address operands are not allowed
-                //   -> copy through scratch register
-                // Includes binary bitwise operators.
-                asm::Instruction::Binary {
-                    op,
-                    src: asm::Operand::Stack(src),
-                    dst: asm::Operand::Stack(dst),
-                } if *op == asm::BinaryOperator::Add
-                    || *op == asm::BinaryOperator::Sub
-                    || *op == asm::BinaryOperator::BitAnd
-                    || *op == asm::BinaryOperator::BitOr
-                    || *op == asm::BinaryOperator::BitXor =>
-                {
-                    instructions.push(asm::Instruction::Mov {
-                        src: asm::Operand::Stack(*src),
-                        dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
-                    });
-                    instructions.push(asm::Instruction::Binary {
-                        op: op.clone(),
-                        src: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
-                        dst: asm::Operand::Stack(*dst),
-                    });
-                }
-
-                // IMUL instructions with a memory address as destination are not allowed
-                //   -> copy destination to scratch register first
-                asm::Instruction::Binary {
-                    op,
-                    src,
-                    dst: asm::Operand::Stack(dst),
-                } if *op == asm::BinaryOperator::Mult => {
-                    instructions.push(asm::Instruction::Mov {
-                        src: asm::Operand::Stack(*dst),
-                        dst: asm::Operand::Reg(DST_SCRATCH_REGISTER),
-                    });
-                    instructions.push(asm::Instruction::Binary {
-                        op: op.clone(),
-                        src: src.clone(),
-                        dst: asm::Operand::Reg(DST_SCRATCH_REGISTER),
-                    });
-                    instructions.push(asm::Instruction::Mov {
-                        src: asm::Operand::Reg(DST_SCRATCH_REGISTER),
-                        dst: asm::Operand::Stack(*dst),
-                    });
-                }
-
-                // SAL/SAR instructions with a memory address as src are not allowed
-                //   -> copy source to CX register first
-                asm::Instruction::Binary {
-                    op,
-                    src: asm::Operand::Stack(src),
-                    dst,
-                } if *op == asm::BinaryOperator::BitShiftLeft
-                    || *op == asm::BinaryOperator::BitShiftRight =>
-                {
-                    instructions.push(asm::Instruction::Mov {
-                        src: asm::Operand::Stack(*src),
-                        dst: asm::Operand::Reg(asm::Reg::CX),
-                    });
-                    instructions.push(asm::Instruction::Binary {
-                        op: op.clone(),
-                        src: asm::Operand::Reg(asm::Reg::CX),
-                        dst: dst.clone(),
-                    });
-                }
-
-                // CMP instructions with two address operands are not allowed
-                //   -> copy through scratch register
-                asm::Instruction::Cmp {
-                    src1: src1 @ asm::Operand::Stack(_),
-                    src2: src2 @ asm::Operand::Stack(_),
-                } => {
-                    instructions.push(asm::Instruction::Mov {
-                        src: src1.clone(),
-                        dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
-                    });
-                    instructions.push(asm::Instruction::Cmp {
-                        src1: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
-                        src2: src2.clone(),
-                    });
-                }
-
-                // CMP instructions with a constant second operand are not allowed
-                //   -> copy through scratch register
-                asm::Instruction::Cmp {
-                    src1,
-                    src2: src2 @ asm::Operand::Imm(_),
-                } => {
-                    instructions.push(asm::Instruction::Mov {
-                        src: src2.clone(),
-                        dst: asm::Operand::Reg(DST_SCRATCH_REGISTER),
-                    });
-                    instructions.push(asm::Instruction::Cmp {
-                        src1: src1.clone(),
-                        src2: asm::Operand::Reg(DST_SCRATCH_REGISTER),
-                    });
-                }
-
-                _ => instructions.push(instruction.clone()),
+                top_level.push(asm::TopLevel::Function(asm::Function {
+                    name: function_definition.name.clone(),
+                    global: function_definition.global,
+                    instructions,
+                    stack_size: function_definition.stack_size,
+                }));
+            }
+            asm::TopLevel::StaticVariable { .. } => {
+                // pass
             }
         }
-
-        function_definitions.push(asm::Function {
-            name: function_definition.name.clone(),
-            instructions,
-            stack_size: function_definition.stack_size,
-        });
     }
 
-    Ok(asm::Program {
-        function_definitions,
-    })
+    Ok(asm::Program { top_level })
 }
 
 #[cfg(test)]
@@ -808,8 +836,9 @@ mod tests {
         assert_eq!(
             ast,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::Mov {
                             src: asm::Operand::Imm(2),
@@ -818,7 +847,7 @@ mod tests {
                         asm::Instruction::Ret,
                     ],
                     stack_size: None,
-                }]
+                })]
             }
         );
     }
@@ -846,8 +875,9 @@ mod tests {
         assert_eq!(
             ast,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::Mov {
                             src: asm::Operand::Imm(2),
@@ -864,7 +894,7 @@ mod tests {
                         asm::Instruction::Ret,
                     ],
                     stack_size: None,
-                }]
+                })]
             }
         );
     }
@@ -890,8 +920,9 @@ mod tests {
         assert_eq!(
             ast,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::Mov {
                             src: asm::Operand::Imm(2),
@@ -904,7 +935,7 @@ mod tests {
                         },
                     ],
                     stack_size: None,
-                }]
+                })]
             }
         );
     }
@@ -930,8 +961,9 @@ mod tests {
         assert_eq!(
             ast,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::Mov {
                             src: asm::Operand::Imm(2),
@@ -945,7 +977,7 @@ mod tests {
                         },
                     ],
                     stack_size: None,
-                }]
+                })]
             }
         );
     }
@@ -971,8 +1003,9 @@ mod tests {
         assert_eq!(
             ast,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::Mov {
                             src: asm::Operand::Imm(2),
@@ -985,7 +1018,7 @@ mod tests {
                         },
                     ],
                     stack_size: None,
-                }]
+                })]
             }
         );
     }
@@ -993,8 +1026,9 @@ mod tests {
     #[test]
     fn test_pass2() {
         let pass1 = asm::Program {
-            function_definitions: vec![asm::Function {
+            top_level: vec![asm::TopLevel::Function(asm::Function {
                 name: "main".into(),
+                global: true,
                 instructions: vec![
                     asm::Instruction::Mov {
                         src: asm::Operand::Imm(2),
@@ -1017,16 +1051,17 @@ mod tests {
                     asm::Instruction::Ret,
                 ],
                 stack_size: None,
-            }],
+            })],
         };
-
-        let pass2 = pass2(pass1).unwrap();
+        let symbol_table = SymbolTable::new();
+        let pass2 = pass2(pass1, &symbol_table).unwrap();
 
         assert_eq!(
             pass2,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::Mov {
                             src: asm::Operand::Imm(2),
@@ -1049,7 +1084,7 @@ mod tests {
                         asm::Instruction::Ret,
                     ],
                     stack_size: Some(ABI_STACK_ALIGNMENT),
-                }]
+                })]
             }
         );
     }
@@ -1057,8 +1092,9 @@ mod tests {
     #[test]
     fn test_pass2_multiple_pseudos() {
         let pass1 = asm::Program {
-            function_definitions: vec![asm::Function {
+            top_level: vec![asm::TopLevel::Function(asm::Function {
                 name: "main".into(),
+                global: true,
                 instructions: vec![
                     asm::Instruction::Mov {
                         src: asm::Operand::Imm(8),
@@ -1091,15 +1127,17 @@ mod tests {
                     asm::Instruction::Ret,
                 ],
                 stack_size: None,
-            }],
+            })],
         };
+        let symbol_table = SymbolTable::new();
+        let pass2 = pass2(pass1, &symbol_table).unwrap();
 
-        let pass2 = pass2(pass1).unwrap();
         assert_eq!(
             pass2,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::Mov {
                             src: asm::Operand::Imm(8),
@@ -1132,7 +1170,7 @@ mod tests {
                         asm::Instruction::Ret,
                     ],
                     stack_size: Some(ABI_STACK_ALIGNMENT), // 3 pseudo registers, each 4 bytes
-                }]
+                })]
             }
         );
     }
@@ -1140,8 +1178,9 @@ mod tests {
     #[test]
     fn test_pass3() {
         let pass2 = asm::Program {
-            function_definitions: vec![asm::Function {
+            top_level: vec![asm::TopLevel::Function(asm::Function {
                 name: "main".into(),
+                global: true,
                 instructions: vec![
                     asm::Instruction::Mov {
                         src: asm::Operand::Imm(8),
@@ -1153,14 +1192,14 @@ mod tests {
                     },
                     asm::Instruction::Mov {
                         src: asm::Operand::Stack(asm::Offset(-4)),
-                        dst: asm::Operand::Stack(asm::Offset(-8)),
+                        dst: asm::Operand::Data("static8".into()),
                     },
                     asm::Instruction::Unary {
                         op: asm::UnaryOperator::Neg,
-                        dst: asm::Operand::Stack(asm::Offset(-8)),
+                        dst: asm::Operand::Data("static8".into()),
                     },
                     asm::Instruction::Mov {
-                        src: asm::Operand::Stack(asm::Offset(-8)),
+                        src: asm::Operand::Data("static8".into()),
                         dst: asm::Operand::Stack(asm::Offset(-12)),
                     },
                     asm::Instruction::Unary {
@@ -1168,7 +1207,7 @@ mod tests {
                         dst: asm::Operand::Stack(asm::Offset(-12)),
                     },
                     asm::Instruction::Cmp {
-                        src1: asm::Operand::Stack(asm::Offset(-8)),
+                        src1: asm::Operand::Data("static8".into()),
                         src2: asm::Operand::Stack(asm::Offset(-12)),
                     },
                     asm::Instruction::Mov {
@@ -1178,15 +1217,16 @@ mod tests {
                     asm::Instruction::Ret,
                 ],
                 stack_size: Some(ABI_STACK_ALIGNMENT),
-            }],
+            })],
         };
 
         let pass3 = pass3(&pass2).unwrap();
         assert_eq!(
             pass3,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::AllocateStack(ABI_STACK_ALIGNMENT),
                         asm::Instruction::Mov {
@@ -1203,14 +1243,14 @@ mod tests {
                         },
                         asm::Instruction::Mov {
                             src: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
-                            dst: asm::Operand::Stack(asm::Offset(-8)),
+                            dst: asm::Operand::Data("static8".into()),
                         },
                         asm::Instruction::Unary {
                             op: asm::UnaryOperator::Neg,
-                            dst: asm::Operand::Stack(asm::Offset(-8)),
+                            dst: asm::Operand::Data("static8".into()),
                         },
                         asm::Instruction::Mov {
-                            src: asm::Operand::Stack(asm::Offset(-8)),
+                            src: asm::Operand::Data("static8".into()),
                             dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
                         },
                         asm::Instruction::Mov {
@@ -1222,7 +1262,7 @@ mod tests {
                             dst: asm::Operand::Stack(asm::Offset(-12)),
                         },
                         asm::Instruction::Mov {
-                            src: asm::Operand::Stack(asm::Offset(-8)),
+                            src: asm::Operand::Data("static8".into()),
                             dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
                         },
                         asm::Instruction::Cmp {
@@ -1236,7 +1276,7 @@ mod tests {
                         asm::Instruction::Ret,
                     ],
                     stack_size: Some(ABI_STACK_ALIGNMENT),
-                }]
+                })]
             }
         );
     }
@@ -1246,19 +1286,21 @@ mod tests {
         // idiv cannot have a constant operand
         //   -> becomes a mov to R10 + idiv
         let pass2 = asm::Program {
-            function_definitions: vec![asm::Function {
+            top_level: vec![asm::TopLevel::Function(asm::Function {
                 name: "main".into(),
+                global: true,
                 instructions: vec![asm::Instruction::Idiv(asm::Operand::Imm(3))],
                 stack_size: Some(0),
-            }],
+            })],
         };
 
         let pass3 = pass3(&pass2).unwrap();
         assert_eq!(
             pass3,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::AllocateStack(0),
                         asm::Instruction::Mov {
@@ -1268,7 +1310,7 @@ mod tests {
                         asm::Instruction::Idiv(asm::Operand::Reg(SRC_SCRATCH_REGISTER)),
                     ],
                     stack_size: Some(0),
-                }]
+                })]
             }
         );
     }
@@ -1278,13 +1320,14 @@ mod tests {
         // add/sub cannot have two addresses
         //   -> becomes mov + add/sub
         let pass2 = asm::Program {
-            function_definitions: vec![asm::Function {
+            top_level: vec![asm::TopLevel::Function(asm::Function {
                 name: "main".into(),
+                global: true,
                 instructions: vec![
                     asm::Instruction::Binary {
                         op: asm::BinaryOperator::Add,
                         src: asm::Operand::Stack(asm::Offset(-12)),
-                        dst: asm::Operand::Stack(asm::Offset(-4)),
+                        dst: asm::Operand::Data("static4".into()),
                     },
                     asm::Instruction::Binary {
                         op: asm::BinaryOperator::Sub,
@@ -1293,15 +1336,16 @@ mod tests {
                     },
                 ],
                 stack_size: Some(ABI_STACK_ALIGNMENT),
-            }],
+            })],
         };
 
         let pass3 = pass3(&pass2).unwrap();
         assert_eq!(
             pass3,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::AllocateStack(ABI_STACK_ALIGNMENT),
                         asm::Instruction::Mov {
@@ -1311,7 +1355,7 @@ mod tests {
                         asm::Instruction::Binary {
                             op: asm::BinaryOperator::Add,
                             src: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
-                            dst: asm::Operand::Stack(asm::Offset(-4)),
+                            dst: asm::Operand::Data("static4".into()),
                         },
                         asm::Instruction::Mov {
                             src: asm::Operand::Stack(asm::Offset(-8)),
@@ -1324,7 +1368,7 @@ mod tests {
                         },
                     ],
                     stack_size: Some(ABI_STACK_ALIGNMENT),
-                }]
+                })]
             }
         );
     }
@@ -1334,23 +1378,32 @@ mod tests {
         // imul cannot use a memory address as destination
         //   -> becomes a mov to R11 as scratch
         let pass2 = asm::Program {
-            function_definitions: vec![asm::Function {
+            top_level: vec![asm::TopLevel::Function(asm::Function {
                 name: "main".into(),
-                instructions: vec![asm::Instruction::Binary {
-                    op: asm::BinaryOperator::Mult,
-                    src: asm::Operand::Imm(3),
-                    dst: asm::Operand::Stack(asm::Offset(-12)),
-                }],
+                global: true,
+                instructions: vec![
+                    asm::Instruction::Binary {
+                        op: asm::BinaryOperator::Mult,
+                        src: asm::Operand::Imm(3),
+                        dst: asm::Operand::Stack(asm::Offset(-12)),
+                    },
+                    asm::Instruction::Binary {
+                        op: asm::BinaryOperator::Mult,
+                        src: asm::Operand::Imm(3),
+                        dst: asm::Operand::Data("static12".into()),
+                    },
+                ],
                 stack_size: Some(ABI_STACK_ALIGNMENT),
-            }],
+            })],
         };
 
         let pass3 = pass3(&pass2).unwrap();
         assert_eq!(
             pass3,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::AllocateStack(ABI_STACK_ALIGNMENT),
                         asm::Instruction::Mov {
@@ -1366,9 +1419,22 @@ mod tests {
                             src: asm::Operand::Reg(DST_SCRATCH_REGISTER),
                             dst: asm::Operand::Stack(asm::Offset(-12)),
                         },
+                        asm::Instruction::Mov {
+                            src: asm::Operand::Data("static12".into()),
+                            dst: asm::Operand::Reg(DST_SCRATCH_REGISTER),
+                        },
+                        asm::Instruction::Binary {
+                            op: asm::BinaryOperator::Mult,
+                            src: asm::Operand::Imm(3),
+                            dst: asm::Operand::Reg(DST_SCRATCH_REGISTER),
+                        },
+                        asm::Instruction::Mov {
+                            src: asm::Operand::Reg(DST_SCRATCH_REGISTER),
+                            dst: asm::Operand::Data("static12".into()),
+                        },
                     ],
                     stack_size: Some(ABI_STACK_ALIGNMENT),
-                }]
+                })]
             }
         );
     }
@@ -1378,39 +1444,41 @@ mod tests {
         // bitwise and/or/xor cannot have two addresses
         //   -> becomes mov + and/or/xor
         let pass2 = asm::Program {
-            function_definitions: vec![asm::Function {
+            top_level: vec![asm::TopLevel::Function(asm::Function {
                 name: "main".into(),
+                global: true,
                 instructions: vec![
                     asm::Instruction::Binary {
                         op: asm::BinaryOperator::BitAnd,
-                        src: asm::Operand::Stack(asm::Offset(-12)),
+                        src: asm::Operand::Data("static12".into()),
                         dst: asm::Operand::Stack(asm::Offset(-4)),
                     },
                     asm::Instruction::Binary {
                         op: asm::BinaryOperator::BitOr,
                         src: asm::Operand::Stack(asm::Offset(-8)),
-                        dst: asm::Operand::Stack(asm::Offset(-12)),
+                        dst: asm::Operand::Data("static12".into()),
                     },
                     asm::Instruction::Binary {
                         op: asm::BinaryOperator::BitXor,
                         src: asm::Operand::Stack(asm::Offset(-8)),
-                        dst: asm::Operand::Stack(asm::Offset(-12)),
+                        dst: asm::Operand::Data("static12".into()),
                     },
                 ],
                 stack_size: Some(ABI_STACK_ALIGNMENT),
-            }],
+            })],
         };
 
         let pass3 = pass3(&pass2).unwrap();
         assert_eq!(
             pass3,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::AllocateStack(ABI_STACK_ALIGNMENT),
                         asm::Instruction::Mov {
-                            src: asm::Operand::Stack(asm::Offset(-12)),
+                            src: asm::Operand::Data("static12".into()),
                             dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
                         },
                         asm::Instruction::Binary {
@@ -1425,7 +1493,7 @@ mod tests {
                         asm::Instruction::Binary {
                             op: asm::BinaryOperator::BitOr,
                             src: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
-                            dst: asm::Operand::Stack(asm::Offset(-12)),
+                            dst: asm::Operand::Data("static12".into()),
                         },
                         asm::Instruction::Mov {
                             src: asm::Operand::Stack(asm::Offset(-8)),
@@ -1434,11 +1502,11 @@ mod tests {
                         asm::Instruction::Binary {
                             op: asm::BinaryOperator::BitXor,
                             src: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
-                            dst: asm::Operand::Stack(asm::Offset(-12)),
+                            dst: asm::Operand::Data("static12".into()),
                         },
                     ],
                     stack_size: Some(ABI_STACK_ALIGNMENT),
-                }]
+                })]
             }
         );
     }
@@ -1448,13 +1516,19 @@ mod tests {
         // bitwise shift cannot have a src address
         //   -> becomes mov + and/or/xor
         let pass2 = asm::Program {
-            function_definitions: vec![asm::Function {
+            top_level: vec![asm::TopLevel::Function(asm::Function {
                 name: "main".into(),
+                global: true,
                 instructions: vec![
                     asm::Instruction::Binary {
                         op: asm::BinaryOperator::BitShiftLeft,
                         src: asm::Operand::Stack(asm::Offset(-12)),
                         dst: asm::Operand::Stack(asm::Offset(-4)),
+                    },
+                    asm::Instruction::Binary {
+                        op: asm::BinaryOperator::BitShiftLeft,
+                        src: asm::Operand::Data("static12".into()),
+                        dst: asm::Operand::Data("static4".into()),
                     },
                     asm::Instruction::Binary {
                         op: asm::BinaryOperator::BitShiftRight,
@@ -1463,15 +1537,16 @@ mod tests {
                     },
                 ],
                 stack_size: Some(ABI_STACK_ALIGNMENT),
-            }],
+            })],
         };
 
         let pass3 = pass3(&pass2).unwrap();
         assert_eq!(
             pass3,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::AllocateStack(ABI_STACK_ALIGNMENT),
                         asm::Instruction::Mov {
@@ -1483,6 +1558,15 @@ mod tests {
                             src: asm::Operand::Reg(asm::Reg::CX),
                             dst: asm::Operand::Stack(asm::Offset(-4)),
                         },
+                        asm::Instruction::Mov {
+                            src: asm::Operand::Data("static12".into()),
+                            dst: asm::Operand::Reg(asm::Reg::CX),
+                        },
+                        asm::Instruction::Binary {
+                            op: asm::BinaryOperator::BitShiftLeft,
+                            src: asm::Operand::Reg(asm::Reg::CX),
+                            dst: asm::Operand::Data("static4".into()),
+                        },
                         asm::Instruction::Binary {
                             op: asm::BinaryOperator::BitShiftRight,
                             src: asm::Operand::Imm(9),
@@ -1490,7 +1574,7 @@ mod tests {
                         },
                     ],
                     stack_size: Some(ABI_STACK_ALIGNMENT),
-                }]
+                })]
             }
         );
     }
@@ -1502,12 +1586,17 @@ mod tests {
         // cmp cannot have a constant as second operand
         //   -> becomes mov + cmp via r11d
         let pass2 = asm::Program {
-            function_definitions: vec![asm::Function {
+            top_level: vec![asm::TopLevel::Function(asm::Function {
                 name: "main".into(),
+                global: true,
                 instructions: vec![
                     asm::Instruction::Cmp {
                         src1: asm::Operand::Stack(asm::Offset(-12)),
                         src2: asm::Operand::Stack(asm::Offset(-4)),
+                    },
+                    asm::Instruction::Cmp {
+                        src1: asm::Operand::Data("static12".into()),
+                        src2: asm::Operand::Data("static4".into()),
                     },
                     asm::Instruction::Cmp {
                         src1: asm::Operand::Stack(asm::Offset(-8)),
@@ -1515,15 +1604,16 @@ mod tests {
                     },
                 ],
                 stack_size: Some(ABI_STACK_ALIGNMENT),
-            }],
+            })],
         };
 
         let pass3 = pass3(&pass2).unwrap();
         assert_eq!(
             pass3,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::AllocateStack(ABI_STACK_ALIGNMENT),
                         asm::Instruction::Mov {
@@ -1535,6 +1625,14 @@ mod tests {
                             src2: asm::Operand::Stack(asm::Offset(-4)),
                         },
                         asm::Instruction::Mov {
+                            src: asm::Operand::Data("static12".into()),
+                            dst: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                        },
+                        asm::Instruction::Cmp {
+                            src1: asm::Operand::Reg(SRC_SCRATCH_REGISTER),
+                            src2: asm::Operand::Data("static4".into()),
+                        },
+                        asm::Instruction::Mov {
                             src: asm::Operand::Imm(5),
                             dst: asm::Operand::Reg(DST_SCRATCH_REGISTER),
                         },
@@ -1544,7 +1642,7 @@ mod tests {
                         },
                     ],
                     stack_size: Some(ABI_STACK_ALIGNMENT),
-                }]
+                })]
             }
         );
     }
@@ -1568,8 +1666,9 @@ mod tests {
         assert_eq!(
             ast,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "simple".into(),
+                    global: true,
                     instructions: vec![
                         asm::Instruction::Mov {
                             // extra Mov
@@ -1583,7 +1682,7 @@ mod tests {
                         asm::Instruction::Ret,
                     ],
                     stack_size: None,
-                }]
+                })]
             }
         );
     }
@@ -1613,8 +1712,9 @@ mod tests {
         assert_eq!(
             ast,
             asm::Program {
-                function_definitions: vec![asm::Function {
+                top_level: vec![asm::TopLevel::Function(asm::Function {
                     name: "eight".into(),
+                    global: true,
                     instructions: vec![
                         // Parameters in registers moved to pseudo registers
                         asm::Instruction::Mov {
@@ -1660,7 +1760,7 @@ mod tests {
                         asm::Instruction::Ret,
                     ],
                     stack_size: None,
-                }]
+                })]
             }
         );
     }

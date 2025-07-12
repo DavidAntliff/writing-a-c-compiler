@@ -1,5 +1,5 @@
 use crate::ast_asm;
-use crate::ast_asm::Instruction;
+use crate::ast_asm::{Instruction, TopLevel};
 use crate::semantics::SymbolTable;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -41,8 +41,15 @@ pub(crate) fn write_out<W: Write>(
     symbol_table: SymbolTable,
     writer: &mut BufWriter<W>,
 ) -> std::io::Result<()> {
-    for function in assembly.function_definitions {
-        write_out_function(function, &symbol_table, writer)?;
+    for item in assembly.top_level {
+        match item {
+            TopLevel::Function(function) => {
+                write_out_function(function, &symbol_table, writer)?;
+            }
+            TopLevel::StaticVariable { .. } => {
+                todo!()
+            }
+        }
     }
 
     let indent = "\t";
@@ -90,7 +97,9 @@ fn write_out_function<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast_asm::{ABI_STACK_ALIGNMENT, BinaryOperator, Function, Offset, Program, Reg};
+    use crate::ast_asm::{
+        BinaryOperator, Function, Offset, Program, Reg, TopLevel, ABI_STACK_ALIGNMENT,
+    };
     use crate::ast_asm::{Operand, UnaryOperator};
     use crate::emitter::LABEL_PREFIX;
     use pretty_assertions::assert_eq;
@@ -98,8 +107,9 @@ mod tests {
     #[test]
     fn test_emit_instructions() {
         let program = Program {
-            function_definitions: vec![Function {
+            top_level: vec![TopLevel::Function(Function {
                 name: "main".into(),
+                global: true,
                 instructions: vec![
                     Instruction::Mov {
                         src: Operand::Reg(Reg::AX),
@@ -156,7 +166,7 @@ mod tests {
                     Instruction::Ret,
                 ],
                 stack_size: Some(ABI_STACK_ALIGNMENT),
-            }],
+            })],
         };
 
         // Create buffer to write to

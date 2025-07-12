@@ -111,7 +111,7 @@ pub fn do_the_thing(
         return Ok(());
     }
 
-    let assembly = codegen::parse(&tacky)?;
+    let assembly = codegen::parse(&tacky, &symbol_table)?;
 
     if stop_after.codegen {
         return Ok(());
@@ -161,7 +161,7 @@ mod tests {
         let mut ast = parser::parse(&lexed)?;
         let symbol_table = semantics::analyse(&mut ast)?;
         let tacky = tacky::emit_program(&ast, &symbol_table)?;
-        let asm = codegen::parse(&tacky)?;
+        let asm = codegen::parse(&tacky, &symbol_table)?;
         Ok(asm)
     }
 
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn test_codegen() {
-        use ast_asm::{Function, Instruction, Operand, Program};
+        use ast_asm::{Function, Instruction, Operand, Program, TopLevel};
         // Listing on page 4, AST on page 13
         let input = r#"
         int main(void) {
@@ -340,8 +340,9 @@ mod tests {
         assert_eq!(
             lex_parse_analyse_and_codegen(input).unwrap(),
             Program {
-                function_definitions: vec![Function {
+                top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
+                    global: true,
                     instructions: vec![
                         Instruction::AllocateStack(0),
                         Instruction::Mov {
@@ -357,7 +358,7 @@ mod tests {
                         Instruction::Ret,
                     ],
                     stack_size: Some(0),
-                }]
+                })]
             }
         );
     }
