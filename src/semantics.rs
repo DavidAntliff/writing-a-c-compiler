@@ -740,11 +740,18 @@ impl SymbolTable {
         match self.get(identifier) {
             Some(symbol) => match &symbol.attrs {
                 IdentifierAttrs::Fun { global, .. } => *global,
-                _ => panic!("Expected IdentifierAttrs::Fun for symbol {:?}", symbol),
+                _ => panic!("Expected IdentifierAttrs::Fun for symbol {symbol:?}"),
             },
-            None => panic!("Expected symbol for {:?}", identifier),
+            None => panic!("Expected symbol for {identifier:?}"),
         }
     }
+
+    // pub(crate) fn expect_var_static(&self, identifier: &Identifier) -> bool {
+    //     match self.get(identifier) {
+    //         Some(symbol) => matches!(symbol.attrs, IdentifierAttrs::Static { .. }),
+    //         None => panic!("Expected symbol for {identifier:?}"),
+    //     }
+    // }
 
     pub(crate) fn iter_sorted(&self) -> impl Iterator<Item = (&Identifier, &SymbolTableEntry)> {
         let mut items: Vec<_> = self.table.iter().collect();

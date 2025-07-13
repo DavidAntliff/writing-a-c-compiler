@@ -32,7 +32,7 @@ pub(crate) fn parse(
     let ast = pass1(tacky);
     //log::debug!("Codegen PASS 1: {ast:#?}");
 
-    // Pass 2 - replace pseudo registers with Stack operands
+    // Pass 2 - replace pseudo registers with Stack or Data operands
     let ast = pass2(ast, symbol_table)?;
     //log::debug!("Codegen PASS 2: {ast:#?}");
 
@@ -417,7 +417,7 @@ impl<'a> PseudoReplacer<'a> {
     }
 }
 
-/// Replace each Pseudo operand with a Stack operand
+/// Replace each Pseudo operand with a Stack or Data operand
 /// and return the final size of the stack frame.
 fn pass2(mut ast: asm::Program, symbol_table: &SymbolTable) -> Result<asm::Program, CodegenError> {
     for definition in &mut ast.top_level {
@@ -477,6 +477,9 @@ fn pass2(mut ast: asm::Program, symbol_table: &SymbolTable) -> Result<asm::Progr
 }
 
 fn pass3(ast: &asm::Program) -> Result<asm::Program, CodegenError> {
+    // As instructions are inserted, it's simpler to build a new AST than to
+    // modify the existing one.
+
     let mut top_level = vec![];
 
     for definition in &ast.top_level {
@@ -638,7 +641,7 @@ fn pass3(ast: &asm::Program) -> Result<asm::Program, CodegenError> {
                 }));
             }
             asm::TopLevel::StaticVariable { .. } => {
-                // pass
+                top_level.push(definition.clone());
             }
         }
     }

@@ -807,6 +807,7 @@ fn emit_while(
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_for(
     init: &ast_c::ForInit,
     condition: &Option<ast_c::Expression>,

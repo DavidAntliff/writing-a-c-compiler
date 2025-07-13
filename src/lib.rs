@@ -8,6 +8,9 @@ mod parser;
 mod semantics;
 mod tacky;
 
+use crate::lexer::Token;
+use crate::semantics::SymbolTable;
+use log::trace;
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -55,18 +58,19 @@ pub fn read_input(input_filename: &Path) -> Result<String, Error> {
     Ok(input)
 }
 
-#[derive(Debug)]
-pub struct StopAfter {
-    pub lex: bool,
-    pub parse: bool,
-    pub semantics: bool,
-    pub tacky: bool,
-    pub codegen: bool,
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum StopAfter {
+    Lexing,
+    Parsing,
+    Semantics,
+    Tacky,
+    Codegen,
+    NoStop,
 }
 
 impl StopAfter {
-    pub fn will_stop(&self) -> bool {
-        self.lex || self.parse || self.semantics || self.tacky || self.codegen
+    pub fn will_stop(self) -> bool {
+        self != StopAfter::NoStop
     }
 }
 
@@ -74,48 +78,23 @@ pub fn do_the_thing(
     input: &str,
     input_filename: &Path,
     output_filename: Option<&Path>,
-    stop_after: &StopAfter,
+    stop_after: StopAfter,
 ) -> Result<(), Error> {
-    log::info!("Lexing input file: {}", input_filename.display());
-    let lexed = lexer::lex(input)?;
+    let outputs = compile_assembly(input, input_filename, stop_after)?;
 
-    //log::debug!("Lexed input: {lexed:#?}");
+    trace!("{outputs:#?}");
 
-    if stop_after.lex {
+    if stop_after == StopAfter::Codegen {
         return Ok(());
     }
 
-    log::info!("Parsing input file: {}", input_filename.display());
-    let mut ast = parser::parse(&lexed)?;
-
-    //log::debug!("AST: {ast:#?}");
-
-    if stop_after.parse {
+    let (assembly, symbol_table) = if let Some(assembly) = outputs.assembly
+        && let Some(symbol_table) = outputs.symbol_table
+    {
+        (assembly, symbol_table)
+    } else {
         return Ok(());
-    }
-
-    log::info!("Semantic analysis");
-    let symbol_table = semantics::analyse(&mut ast)?;
-
-    //log::debug!("Semantics AST: {ast:#?}");
-
-    if stop_after.semantics {
-        return Ok(());
-    }
-
-    let tacky = tacky::emit_program(&ast, &symbol_table)?;
-
-    //log::debug!("TACKY: {tacky:#?}");
-
-    if stop_after.tacky {
-        return Ok(());
-    }
-
-    let assembly = codegen::parse(&tacky, &symbol_table)?;
-
-    if stop_after.codegen {
-        return Ok(());
-    }
+    };
 
     // if output_filename is none, set it to input filename with .s extension
     let output_filename = match output_filename {
@@ -132,9 +111,97 @@ pub fn do_the_thing(
     Ok(())
 }
 
+#[allow(dead_code)]
+#[derive(Debug)]
+struct CompileOutputs {
+    lexed: Option<Vec<Token>>,
+    ast: Option<ast_c::Program>,
+    symbol_table: Option<SymbolTable>,
+    tacky: Option<tacky::Program>,
+    assembly: Option<ast_asm::Program>,
+}
+
+fn compile_assembly(
+    input: &str,
+    input_filename: &Path,
+    stop_after: StopAfter,
+) -> Result<CompileOutputs, Error> {
+    log::info!("Lexing input file: {}", input_filename.display());
+    let lexed = lexer::lex(input)?;
+
+    //log::debug!("Lexed input: {lexed:#?}");
+
+    if stop_after == StopAfter::Lexing {
+        return Ok(CompileOutputs {
+            lexed: Some(lexed),
+            ast: None,
+            symbol_table: None,
+            tacky: None,
+            assembly: None,
+        });
+    }
+
+    log::info!("Parsing input file: {}", input_filename.display());
+    let mut ast = parser::parse(&lexed)?;
+
+    //log::debug!("AST: {ast:#?}");
+
+    if stop_after == StopAfter::Parsing {
+        return Ok(CompileOutputs {
+            lexed: Some(lexed),
+            ast: Some(ast),
+            symbol_table: None,
+            tacky: None,
+            assembly: None,
+        });
+    }
+
+    log::info!("Semantic analysis");
+    let symbol_table = semantics::analyse(&mut ast)?;
+
+    //log::debug!("Semantics AST: {ast:#?}");
+
+    if stop_after == StopAfter::Semantics {
+        return Ok(CompileOutputs {
+            lexed: Some(lexed),
+            ast: Some(ast),
+            symbol_table: Some(symbol_table),
+            tacky: None,
+            assembly: None,
+        });
+    }
+
+    let tacky = tacky::emit_program(&ast, &symbol_table)?;
+
+    //log::debug!("TACKY: {tacky:#?}");
+
+    if stop_after == StopAfter::Tacky {
+        return Ok(CompileOutputs {
+            lexed: Some(lexed),
+            ast: Some(ast),
+            symbol_table: Some(symbol_table),
+            tacky: Some(tacky),
+            assembly: None,
+        });
+    }
+
+    let assembly = codegen::parse(&tacky, &symbol_table)?;
+
+    Ok(CompileOutputs {
+        lexed: Some(lexed),
+        ast: Some(ast),
+        symbol_table: Some(symbol_table),
+        tacky: Some(tacky),
+        assembly: Some(assembly),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::emitter::abi::ALIGN_DIRECTIVE;
+    use crate::emitter::abi::INDIRECT_CALL_SUFFIX;
+    use emitter::abi::{FOOTER, PUBLIC_PREFIX};
     use std::io::BufWriter;
 
     use crate::ast_c::{Block, BlockItem, Expression, FunDecl, Program, Statement};
@@ -147,37 +214,56 @@ mod tests {
     static INIT: Once = Once::new();
 
     fn lex_and_parse(input: &str) -> Result<Program, Error> {
-        Ok(parser::parse(&lexer::lex(input)?)?)
+        let outputs = compile_assembly(input, Path::new("input.c"), StopAfter::Parsing)?;
+
+        Ok(outputs
+            .ast
+            .expect("AST should be present after lexing and parsing"))
     }
 
-    fn lex_parse_and_analyse(input: &str) -> Result<Program, Error> {
-        let mut ast = parser::parse(&lexer::lex(input)?)?;
-        semantics::analyse(&mut ast)?;
-        Ok(ast)
+    fn lex_parse_and_analyse(input: &str) -> Result<(Program, SymbolTable), Error> {
+        let outputs = compile_assembly(input, Path::new("input.c"), StopAfter::Semantics)?;
+
+        Ok((
+            outputs
+                .ast
+                .expect("AST should be present after lexing and parsing"),
+            outputs
+                .symbol_table
+                .expect("Symbol table should be present after semantic analysis"),
+        ))
     }
 
     fn lex_parse_analyse_and_codegen(input: &str) -> Result<ast_asm::Program, Error> {
-        let lexed = lexer::lex(input)?;
-        let mut ast = parser::parse(&lexed)?;
-        let symbol_table = semantics::analyse(&mut ast)?;
-        let tacky = tacky::emit_program(&ast, &symbol_table)?;
-        let asm = codegen::parse(&tacky, &symbol_table)?;
-        Ok(asm)
+        let outputs = compile_assembly(input, Path::new("input.c"), StopAfter::Codegen)?;
+        Ok(outputs
+            .assembly
+            .expect("Assembly should be present after codegen"))
     }
 
     fn full_compile(input: &str) -> Result<String, Error> {
-        let asm = lex_parse_analyse_and_codegen(input)?;
+        let outputs = compile_assembly(input, Path::new("input.c"), StopAfter::Codegen)?;
 
         let buffer = Vec::new();
         let mut writer = BufWriter::new(buffer);
 
-        let symbol_table = SymbolTable::new();
-        assert!(emitter::write_out(asm, symbol_table, &mut writer).is_ok());
+        assert!(
+            emitter::write_out(
+                outputs
+                    .assembly
+                    .expect("Assembly should be present after codegen"),
+                outputs
+                    .symbol_table
+                    .expect("Symbol table should be present after semantic analysis"),
+                &mut writer
+            )
+            .is_ok()
+        );
         let result = String::from_utf8(writer.into_inner().unwrap()).unwrap();
         Ok(result)
     }
 
-    fn listing_is_equivalent(listing: &str, expected: &str) -> Result<(), String> {
+    pub(crate) fn listing_is_equivalent(listing: &str, expected: &str) -> Result<(), String> {
         let listing = listing
             .lines()
             .filter(|line| !line.trim().is_empty())
@@ -208,9 +294,7 @@ mod tests {
         let line_parts = line.split_whitespace().collect::<Vec<_>>();
         let expected_parts = expected.split_whitespace().collect::<Vec<_>>();
 
-        assert_eq_as_result!(line_parts, expected_parts)?;
-
-        Ok(())
+        assert_eq_as_result!(line_parts, expected_parts)
     }
 
     #[allow(dead_code)]
@@ -602,24 +686,14 @@ mod tests {
         let listing = full_compile(input);
         assert_ok!(&listing);
 
-        let func_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
-        let func_suffix = if cfg!(target_os = "linux") {
-            "@PLT"
-        } else {
-            ""
-        };
-        let asm_suffix = if cfg!(target_os = "linux") {
-            "\t.section\t.note.GNU-stack,\"\",@progbits\n"
-        } else {
-            r#""#
-        };
-        let simple = format!("{func_prefix}simple{func_suffix}");
+        let simple = format!("{PUBLIC_PREFIX}simple");
 
         assert_ok!(listing_is_equivalent(
             &listing.unwrap(),
             &format!(
                 r#"
                 .globl {simple}
+                .text
             {simple}:
                 pushq %rbp
                 movq %rsp, %rbp
@@ -633,7 +707,105 @@ mod tests {
                 movq %rbp, %rsp
                 popq %rbp
                 ret
-                {asm_suffix}
+                {FOOTER}
+            "#
+            )
+        ));
+    }
+
+    #[test]
+    fn test_file_scope_definitions() {
+        let input = r#"
+        int a;
+        int b = 3;
+        extern int c;
+        static int d = 4;
+
+        extern int external(void);
+
+        static int simple(int param) {
+           return param;
+        }
+
+        int main(void) {
+            return simple(a + b + c + d + external());
+        }
+        "#;
+
+        let listing = full_compile(input);
+        assert_ok!(&listing);
+
+        let simple = format!("{PUBLIC_PREFIX}simple");
+        let main = format!("{PUBLIC_PREFIX}main");
+
+        assert_ok!(listing_is_equivalent(
+            &listing.unwrap(),
+            &format!(
+                r#"
+                .text
+            {simple}:
+                pushq   %rbp
+                movq    %rsp, %rbp
+                subq    $16, %rsp
+                movl    %edi, -4(%rbp)
+                movl    -4(%rbp), %eax
+                movq    %rbp, %rsp
+                popq    %rbp
+                ret
+                movl    $0, %eax
+                movq    %rbp, %rsp
+                popq    %rbp
+                ret
+                .globl  {main}
+                .text
+            {main}:
+                pushq   %rbp
+                movq    %rsp, %rbp
+                subq    $32, %rsp
+                movl    _a(%rip), %r10d
+                movl    %r10d, -4(%rbp)
+                movl    _b(%rip), %r10d
+                addl    %r10d, -4(%rbp)
+                movl    -4(%rbp), %r10d
+                movl    %r10d, -8(%rbp)
+                movl    _c(%rip), %r10d
+                addl    %r10d, -8(%rbp)
+                movl    -8(%rbp), %r10d
+                movl    %r10d, -12(%rbp)
+                movl    _d(%rip), %r10d
+                addl    %r10d, -12(%rbp)
+                call    _external{INDIRECT_CALL_SUFFIX}
+                movl    %eax, -16(%rbp)
+                movl    -12(%rbp), %r10d
+                movl    %r10d, -20(%rbp)
+                movl    -16(%rbp), %r10d
+                addl    %r10d, -20(%rbp)
+                movl    -20(%rbp), %edi
+                call    _simple{INDIRECT_CALL_SUFFIX}
+                movl    %eax, -24(%rbp)
+                movl    -24(%rbp), %eax
+                movq    %rbp, %rsp
+                popq    %rbp
+                ret
+                movl    $0, %eax
+                movq    %rbp, %rsp
+                popq    %rbp
+                ret
+                .globl  _a
+                .bss
+                {ALIGN_DIRECTIVE} 4
+            _a:
+                .zero   4
+                .globl  _b
+                .data
+                {ALIGN_DIRECTIVE} 4
+            _b:
+                .long   3
+                .data
+                {ALIGN_DIRECTIVE} 4
+            _d:
+                .long   4
+                {FOOTER}
             "#
             )
         ));

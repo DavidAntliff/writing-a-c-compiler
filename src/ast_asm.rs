@@ -38,20 +38,22 @@
 //!   R11: scratch
 //!
 
-use crate::emitter::LABEL_PREFIX;
-use crate::semantics::{SymbolTable, Type};
+use crate::emitter::abi::PUBLIC_PREFIX;
+use crate::emitter::abi::{INDIRECT_CALL_SUFFIX, PRIVATE_PREFIX};
+use crate::semantics::{IdentifierAttrs, SymbolTable, Type};
+use assert_matches::assert_matches;
 use std::fmt::{Display, Formatter};
 
 pub(crate) const STACK_SLOT_SIZE: usize = 4; // 4 bytes per temporary variable
 pub(crate) const ABI_PARAM_SIZE: usize = 8; // 8 bytes per parameter
 pub(crate) const ABI_STACK_ALIGNMENT: usize = 16; // 16 byte alignment for stack
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Program {
     pub(crate) top_level: Vec<TopLevel>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TopLevel {
     Function(Function),
     StaticVariable {
@@ -61,7 +63,7 @@ pub(crate) enum TopLevel {
     },
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Function {
     pub(crate) name: Identifier,
     pub(crate) global: bool,
@@ -73,24 +75,54 @@ pub(crate) struct Function {
 pub(crate) struct Identifier(pub(crate) String);
 
 impl Identifier {
-    pub(crate) fn emit_as_label(&self) -> String {
-        format!("{LABEL_PREFIX}{}", self.0)
+    pub(crate) fn as_private_symbol(&self) -> String {
+        format!("{PRIVATE_PREFIX}{}", self.0)
+    }
+
+    pub(crate) fn as_public_symbol(&self) -> String {
+        format!("{PUBLIC_PREFIX}{}", self.0)
     }
 
     pub(crate) fn emit(&self, symbol_table: &SymbolTable) -> String {
-        let prefix = if cfg!(target_os = "macos") { "_" } else { "" };
-        let suffix = if cfg!(target_os = "linux") {
-            if let Some(item) = symbol_table.get(&self.0)
-                && let Type::Function { .. } = item.type_
-            {
-                "@PLT"
-            } else {
-                ""
-            }
-        } else {
-            ""
-        };
-        format!("{prefix}{symbol}{suffix}", symbol = self.0)
+        match symbol_table.get(&self.0) {
+            Some(item) => match item.attrs {
+                IdentifierAttrs::Fun { .. } => {
+                    assert_matches!(
+                        item.type_,
+                        Type::Function { .. },
+                        "Expected function type for identifier {}",
+                        self.0
+                    );
+                    // Static and global function names always use the export style
+                    self.as_public_symbol()
+                }
+                IdentifierAttrs::Static { .. } => self.as_public_symbol(),
+                IdentifierAttrs::Local => self.as_private_symbol(),
+            },
+            None => panic!("Identifier {} not found in symbol table", self.0),
+        }
+    }
+
+    fn emit_at_call_site(&self, symbol_table: &SymbolTable) -> String {
+        match symbol_table.get(&self.0) {
+            Some(item) => match item.attrs {
+                IdentifierAttrs::Fun { global, .. } => {
+                    assert_matches!(
+                        item.type_,
+                        Type::Function { .. },
+                        "Expected function type for identifier {}",
+                        self.0
+                    );
+                    if global {
+                        format!("{}{INDIRECT_CALL_SUFFIX}", self.as_public_symbol())
+                    } else {
+                        self.as_public_symbol()
+                    }
+                }
+                _ => panic!("Identifier {} is not a function", self.0),
+            },
+            None => panic!("Identifier {} not found in symbol table", self.0),
+        }
     }
 }
 
@@ -156,8 +188,12 @@ pub(crate) enum Instruction {
 impl Instruction {
     pub(crate) fn emit(&self, symbol_table: &SymbolTable) -> String {
         match self {
-            Instruction::Mov { src, dst } => format!("movl\t{src}, {dst}"),
-            Instruction::Unary { op, dst } => format!("{op}\t{dst}"),
+            Instruction::Mov { src, dst } => format!(
+                "movl\t{src}, {dst}",
+                src = src.emit(symbol_table),
+                dst = dst.emit(symbol_table)
+            ),
+            Instruction::Unary { op, dst } => format!("{op}\t{dst}", dst = dst.emit(symbol_table)),
             Instruction::Binary {
                 op,
                 src: Operand::Reg(r),
@@ -165,15 +201,26 @@ impl Instruction {
             } if *op == BinaryOperator::BitShiftLeft || *op == BinaryOperator::BitShiftRight => {
                 format!(
                     "{op}\t%{r}, {dst}",
-                    r = r.fmt_with_width(RegisterWidth::W8Low)
+                    r = r.fmt_with_width(RegisterWidth::W8Low),
+                    dst = dst.emit(symbol_table)
                 )
             }
-            Instruction::Binary { op, src, dst } => format!("{op}\t{src}, {dst}"),
-            Instruction::Idiv(src) => format!("idivl\t{src}"),
+            Instruction::Binary { op, src, dst } => format!(
+                "{op}\t{src}, {dst}",
+                src = src.emit(symbol_table),
+                dst = dst.emit(symbol_table)
+            ),
+            Instruction::Idiv(src) => format!("idivl\t{src}", src = src.emit(symbol_table)),
             Instruction::Cdq => "cdq".into(),
-            Instruction::Cmp { src1, src2 } => format!("cmpl\t{src1}, {src2}"),
-            Instruction::Jmp { target } => format!("jmp\t{}", target.emit_as_label()),
-            Instruction::JmpCC { cc, target } => format!("j{cc}\t{}", target.emit_as_label()),
+            Instruction::Cmp { src1, src2 } => format!(
+                "cmpl\t{src1}, {src2}",
+                src1 = src1.emit(symbol_table),
+                src2 = src2.emit(symbol_table)
+            ),
+            Instruction::Jmp { target } => format!("jmp\t{}", target.as_private_symbol()),
+            Instruction::JmpCC { cc, target } => {
+                format!("j{cc}\t{}", target.as_private_symbol())
+            }
             Instruction::SetCC { cc, dst } => match dst {
                 Operand::Reg(r) => {
                     format!("set{cc}\t%{r}", r = r.fmt_with_width(RegisterWidth::W8Low))
@@ -181,7 +228,7 @@ impl Instruction {
                 Operand::Stack(offset) => format!("set{cc}\t{offset}(%rbp)"),
                 _ => panic!("Invalid operand for SetCC"),
             },
-            Instruction::Label(label) => format!("{}:", label.emit_as_label()),
+            Instruction::Label(label) => format!("{}:", label.as_private_symbol()),
             Instruction::AllocateStack(size) => format!("subq\t${size}, %rsp"),
             Instruction::Ret => "ret".into(),
 
@@ -192,15 +239,13 @@ impl Instruction {
                 // Must be 64-bit register or immediate value
                 let src = match op {
                     Operand::Reg(r) => format!("%{}", r.fmt_with_width(RegisterWidth::W64)),
-                    _ => format!("{op}"),
+                    _ => op.emit(symbol_table),
                 };
                 format!("pushq\t{src}")
                 //format!("pushq\t{op}")
             }
             Instruction::Call(label) => {
-                #[cfg(target_os = "linux")]
-                todo!("Implement @PLT suffix on Linux");
-                format!("call\t{}", label.emit(symbol_table))
+                format!("call\t{}", label.emit_at_call_site(symbol_table))
             }
         }
     }
@@ -258,14 +303,14 @@ pub(crate) enum Operand {
     Data(Identifier),
 }
 
-impl Display for Operand {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl Operand {
+    pub(crate) fn emit(&self, symbol_table: &SymbolTable) -> String {
         match self {
-            Operand::Imm(i) => write!(f, "${i}"),
-            Operand::Reg(reg) => write!(f, "%{reg}"), // TODO: needs width consideration
+            Operand::Imm(i) => format!("${i}"),
+            Operand::Reg(reg) => format!("%{reg}"), // TODO: needs width consideration
             Operand::Pseudo(_) => panic!("Pseudo operands should not be emitted"),
-            Operand::Stack(n) => write!(f, "{n}(%rbp)"),
-            Operand::Data(id) => todo!(),
+            Operand::Stack(n) => format!("{n}(%rbp)"),
+            Operand::Data(id) => format!("{}(%rip)", id.emit(symbol_table)),
         }
     }
 }

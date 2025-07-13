@@ -1,15 +1,58 @@
 use crate::ast_asm;
-use crate::ast_asm::{Instruction, TopLevel};
+use crate::ast_asm::{Identifier, Instruction, TopLevel};
+use crate::emitter::abi::{ALIGN_DIRECTIVE, FOOTER};
 use crate::semantics::SymbolTable;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use thiserror::Error;
 
+// NOTE:
+//  • “local” (STB_LOCAL) symbols are only visible inside the current object file (translation unit).
+//  • “global” (STB_GLOBAL) symbols are visible to the linker across object files, but
+//    don’t necessarily end up in the dynamic symbol table.
+//  • “public” or “exported” symbols are those placed in the *dynamic* symbol table
+//    (so they can be looked up or interposed at runtime by other binaries/DSOs).
+
 #[cfg(target_os = "linux")]
-pub(crate) const LABEL_PREFIX: &str = ".L";
+pub(crate) mod abi {
+    pub const PUBLIC_PREFIX: &str = "";
+    pub const PRIVATE_PREFIX: &str = ".L";
+    pub const INDIRECT_CALL_SUFFIX: &str = "@PLT";
+    pub const ALIGN_DIRECTIVE: &str = ".align";
+    pub const FOOTER: &str = ".section\t.note.GNU-stack,\"\",@progbits";
+}
+
 #[cfg(target_os = "macos")]
-pub(crate) const LABEL_PREFIX: &str = "L";
+pub(crate) mod abi {
+    pub const PUBLIC_PREFIX: &str = "_";
+    pub const PRIVATE_PREFIX: &str = "L";
+    pub const INDIRECT_CALL_SUFFIX: &str = "";
+    pub const ALIGN_DIRECTIVE: &str = ".balign";
+    pub const FOOTER: &str = "";
+}
+
+// #[cfg(target_os = "linux")]
+// pub(crate) const EXPORT_SYMBOL_PREFIX: &str = "";
+// #[cfg(target_os = "macos")]
+// pub(crate) const EXPORT_SYMBOL_PREFIX: &str = "_";
+//
+// #[cfg(target_os = "linux")]
+// pub(crate) const LOCAL_SYMBOL_PREFIX: &str = ".L";
+// #[cfg(target_os = "macos")]
+// pub(crate) const LOCAL_SYMBOL_PREFIX: &str = "L";
+
+// #[cfg(target_os = "linux")]
+// pub(crate) const ALIGN_DIRECTIVE: &str = ".align";
+// #[cfg(target_os = "macos")]
+// pub(crate) const ALIGN_DIRECTIVE: &str = ".balign";
+
+// #[cfg(target_os = "linux")]
+// pub(crate) const EXPORT_FUNCTION_SUFFIX: &str = "@PLT";
+// #[cfg(target_os = "macos")]
+// pub(crate) const EXPORT_FUNCTION_SUFFIX: &str = "";
+
+const INDENT: &str = "\t";
 
 #[derive(Debug, PartialEq, Error)]
 #[error("{message}")]
@@ -41,21 +84,21 @@ pub(crate) fn write_out<W: Write>(
     symbol_table: SymbolTable,
     writer: &mut BufWriter<W>,
 ) -> std::io::Result<()> {
+    // TODO: explicitly emit functions first?
     for item in assembly.top_level {
         match item {
             TopLevel::Function(function) => {
                 write_out_function(function, &symbol_table, writer)?;
             }
-            TopLevel::StaticVariable { .. } => {
-                todo!()
+            TopLevel::StaticVariable { name, global, init } => {
+                write_out_static_variable(name, global, init, writer)?;
             }
         }
     }
 
-    let indent = "\t";
-
-    if cfg!(target_os = "linux") {
-        writeln!(writer, "{indent}.section\t.note.GNU-stack,\"\",@progbits")?;
+    #[allow(clippy::const_is_empty)]
+    if !FOOTER.is_empty() {
+        writeln!(writer, "{INDENT}{FOOTER}")?;
     }
 
     writer.flush()?;
@@ -68,29 +111,55 @@ fn write_out_function<W: Write>(
     symbol_table: &SymbolTable,
     writer: &mut BufWriter<W>,
 ) -> std::io::Result<()> {
-    let indent = "\t";
-
     let symbol = &function.name.emit(symbol_table);
 
-    //writeln!(writer, "    .text")?;
-    writeln!(writer, "{indent}.globl\t{symbol}")?;
+    if function.global {
+        writeln!(writer, "{INDENT}.globl\t{symbol}")?;
+    };
+    writeln!(writer, "{INDENT}.text")?;
     writeln!(writer, "{symbol}:")?;
 
     // Allocate stack
-    writeln!(writer, "{indent}pushq\t%rbp")?;
-    writeln!(writer, "{indent}movq\t%rsp, %rbp")?;
+    writeln!(writer, "{INDENT}pushq\t%rbp")?;
+    writeln!(writer, "{INDENT}movq\t%rsp, %rbp")?;
 
     for instruction in function.instructions {
         if instruction == Instruction::Ret {
-            writeln!(writer, "{indent}movq\t%rbp, %rsp")?;
-            writeln!(writer, "{indent}popq\t%rbp")?;
+            writeln!(writer, "{INDENT}movq\t%rbp, %rsp")?;
+            writeln!(writer, "{INDENT}popq\t%rbp")?;
         }
         if !matches!(instruction, Instruction::Label(_)) {
-            write!(writer, "{indent}")?;
+            write!(writer, "{INDENT}")?;
         }
         writeln!(writer, "{}", instruction.emit(symbol_table))?;
     }
 
+    Ok(())
+}
+
+fn write_out_static_variable<W: Write>(
+    name: Identifier,
+    global: bool,
+    init: usize,
+    writer: &mut BufWriter<W>,
+) -> std::io::Result<()> {
+    let symbol = &name.as_public_symbol();
+
+    if global {
+        writeln!(writer, "{INDENT}.globl\t{symbol}")?;
+    };
+
+    if init == 0 {
+        writeln!(writer, "{INDENT}.bss")?;
+        writeln!(writer, "{ALIGN_DIRECTIVE} 4")?;
+        writeln!(writer, "{symbol}:")?;
+        writeln!(writer, "{INDENT}.zero\t4")?;
+    } else {
+        writeln!(writer, "{INDENT}.data")?;
+        writeln!(writer, "{ALIGN_DIRECTIVE} 4")?;
+        writeln!(writer, "{symbol}:")?;
+        writeln!(writer, "{INDENT}.long\t{init}")?;
+    }
     Ok(())
 }
 
@@ -101,8 +170,12 @@ mod tests {
         BinaryOperator, Function, Offset, Program, Reg, TopLevel, ABI_STACK_ALIGNMENT,
     };
     use crate::ast_asm::{Operand, UnaryOperator};
-    use crate::emitter::LABEL_PREFIX;
-    use pretty_assertions::assert_eq;
+    use crate::emitter::abi::FOOTER;
+    use crate::emitter::abi::PRIVATE_PREFIX;
+    use crate::emitter::abi::PUBLIC_PREFIX;
+    use crate::semantics::{IdentifierAttrs, Type};
+    use crate::tests::listing_is_equivalent;
+    use assertables::assert_ok;
 
     #[test]
     fn test_emit_instructions() {
@@ -173,46 +246,50 @@ mod tests {
         let buffer = Vec::new();
         let mut writer = BufWriter::new(buffer);
 
-        let symbol_table = SymbolTable::new();
+        let mut symbol_table = SymbolTable::new();
+        symbol_table.add(
+            "main".into(),
+            Type::Function { param_count: 0 },
+            IdentifierAttrs::Fun {
+                defined: true,
+                global: true,
+            },
+        );
+
         assert!(write_out(program, symbol_table, &mut writer).is_ok());
-        let result = String::from_utf8(writer.into_inner().unwrap()).unwrap();
+        let listing = String::from_utf8(writer.into_inner().unwrap()).unwrap();
 
-        let main_prefix = if cfg!(target_os = "macos") { "_" } else { "" };
+        let main = format!("{PUBLIC_PREFIX}main");
 
-        let suffix = if cfg!(target_os = "linux") {
-            "\t.section\t.note.GNU-stack,\"\",@progbits\n"
-        } else {
-            r#""#
-        };
-
-        assert_eq!(
-            result,
-            format!(
-                r#"	.globl	{main_prefix}main
-{main_prefix}main:
-	pushq	%rbp
-	movq	%rsp, %rbp
-	movl	%eax, $2
-	notl	-4(%rbp)
-	addl	-4(%rbp), %r10d
-	imull	$42, %r10d
-	idivl	%r10d
-	cdq
-	shll	$4, -4(%rbp)
-	movl	-4(%rbp), %ecx
-	sarl	%cl, $42
-	cmpl	$2, %r11d
-	jmp	{LABEL_PREFIX}label1
-	jge	{LABEL_PREFIX}label2
-{LABEL_PREFIX}label1:
-	setne	%r11b
-{LABEL_PREFIX}label2:
-	subq	$4, %rsp
-	movq	%rbp, %rsp
-	popq	%rbp
-	ret
-{suffix}"#
+        assert_ok!(listing_is_equivalent(
+            &listing,
+            &format!(
+                r#"	.globl  {main}
+                    .text
+                {main}:
+                    pushq   %rbp
+                    movq    %rsp, %rbp
+                    movl    %eax, $2
+                    notl    -4(%rbp)
+                    addl    -4(%rbp), %r10d
+                    imull   $42, %r10d
+                    idivl   %r10d
+                    cdq
+                    shll    $4, -4(%rbp)
+                    movl    -4(%rbp), %ecx
+                    sarl    %cl, $42
+                    cmpl    $2, %r11d
+                    jmp     {PRIVATE_PREFIX}label1
+                    jge     {PRIVATE_PREFIX}label2
+                {PRIVATE_PREFIX}label1:
+                    setne   %r11b
+                {PRIVATE_PREFIX}label2:
+                    subq    $4, %rsp
+                    movq    %rbp, %rsp
+                    popq    %rbp
+                    ret
+                    {FOOTER}"#
             )
-        )
+        ))
     }
 }

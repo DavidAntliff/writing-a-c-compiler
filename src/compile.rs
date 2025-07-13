@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use env_logger::Env;
 use line_numbers::LinePositions;
 use pcc::{do_the_thing, Error, StopAfter};
@@ -6,6 +6,11 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
+#[command(group(
+    ArgGroup::new("stop-after")
+        .args(&["lex", "parse", "validate", "tacky", "codegen"])
+        .multiple(false)
+))]
 struct Cli {
     #[arg(short = 'd', long = "debug", action)]
     debug: bool,
@@ -44,6 +49,24 @@ struct Cli {
     codegen: bool,
 }
 
+impl Cli {
+    pub fn stop_after(&self) -> StopAfter {
+        if self.lex {
+            StopAfter::Lexing
+        } else if self.parse {
+            StopAfter::Parsing
+        } else if self.validate {
+            StopAfter::Semantics
+        } else if self.tacky {
+            StopAfter::Tacky
+        } else if self.codegen {
+            StopAfter::Codegen
+        } else {
+            StopAfter::NoStop
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -60,19 +83,13 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     })?;
 
-    let stop_after = StopAfter {
-        lex: cli.lex,
-        parse: cli.parse,
-        semantics: cli.validate,
-        tacky: cli.tacky,
-        codegen: cli.codegen,
-    };
+    let stop_after = cli.stop_after();
 
     // TODO: Due to the preprocessor not emitting #line directives, the reported
     //       line numbers in errors may be incorrect. This is a known issue due to
     //       the preprocessor using the -P option.
 
-    match do_the_thing(&input, &cli.input, cli.output.as_deref(), &stop_after) {
+    match do_the_thing(&input, &cli.input, cli.output.as_deref(), stop_after) {
         Ok(_) => Ok(()),
         Err(Error::Parser(e)) => {
             let line_positions = LinePositions::from(input.as_str());

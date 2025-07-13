@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use env_logger::Env;
 use line_numbers::LinePositions;
 use log::{debug, info};
@@ -8,7 +8,15 @@ use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
+#[command(group(
+    ArgGroup::new("stop-after")
+        .args(&["lex", "parse", "validate", "tacky", "codegen"])
+        .multiple(false)
+))]
 struct Cli {
+    #[arg(long = "trace", action)]
+    trace: bool,
+
     #[arg(short = 'd', long = "debug", action)]
     debug: bool,
 
@@ -55,29 +63,43 @@ struct Cli {
     skip_link: bool,
 }
 
+impl Cli {
+    pub fn stop_after(&self) -> StopAfter {
+        if self.lex {
+            StopAfter::Lexing
+        } else if self.parse {
+            StopAfter::Parsing
+        } else if self.validate {
+            StopAfter::Semantics
+        } else if self.tacky {
+            StopAfter::Tacky
+        } else if self.codegen {
+            StopAfter::Codegen
+        } else {
+            StopAfter::NoStop
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let default_level = match (cli.debug, cli.verbose, cli.quiet) {
-        (_, _, true) => "error",
-        (true, _, _) => "debug",
-        (_, true, _) => "info",
-        (_, _, _) => "warn",
+    let default_level = match (cli.trace, cli.debug, cli.verbose, cli.quiet) {
+        // --quiet always wins
+        (_, _, _, true) => "error",
+        (true, _, _, _) => "trace",
+        (_, true, _, _) => "debug",
+        (_, _, true, _) => "info",
+        (_, _, _, _) => "warn",
     };
     env_logger::Builder::from_env(Env::default().default_filter_or(default_level)).init();
 
-    let stop_after = StopAfter {
-        lex: cli.lex,
-        parse: cli.parse,
-        semantics: cli.validate,
-        tacky: cli.tacky,
-        codegen: cli.codegen,
-    };
+    let stop_after = cli.stop_after();
 
     let mut assembly_files = Vec::new();
 
     for input_filename in &cli.input {
-        let assembly_file = process_file(input_filename, &stop_after)?;
+        let assembly_file = process_file(input_filename, stop_after)?;
         assembly_files.push(assembly_file);
     }
 
@@ -96,7 +118,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn process_file(input_filename: &Path, stop_after: &StopAfter) -> anyhow::Result<PathBuf> {
+fn process_file(input_filename: &Path, stop_after: StopAfter) -> anyhow::Result<PathBuf> {
     let preprocessed_input = preprocess(input_filename)?;
     let input = pcc::read_input(&preprocessed_input)?;
     let assembly_file = compile(&input, &preprocessed_input, stop_after).map_err(|e| match e {
@@ -147,7 +169,7 @@ fn preprocess(input_filename: &Path) -> Result<PathBuf, Error> {
     Ok(preprocessed_filename)
 }
 
-fn compile(input: &str, input_filename: &Path, stop_after: &StopAfter) -> Result<PathBuf, Error> {
+fn compile(input: &str, input_filename: &Path, stop_after: StopAfter) -> Result<PathBuf, Error> {
     info!("Compiling input file: {}", input_filename.display());
 
     // TODO: Due to the preprocessor not emitting #line directives, the reported
