@@ -466,8 +466,6 @@ mod tests {
         );
     }
 
-    // TODO: Add integration tests - full .c to .s compilation
-
     #[test]
     fn test_invalid_assign_to_constant() {
         // Page 104

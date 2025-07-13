@@ -22,6 +22,7 @@ VALID_C_PROGRAMS = {
     "goto": CProgram(Path("tests/c/valid/goto.c"), 9),
     "hello_world_putchar": CProgram(Path("tests/c/valid/hello_world_putchar.c"), 0, "Hello, World!\n"),
     "if_else": CProgram(Path("tests/c/valid/if_else.c"),),# 3),
+    "if_two_functions": CProgram(Path("tests/c/valid/if_two_functions.c"),),
     "function_call": CProgram(Path("tests/c/valid/function_call.c"),),# 3),
     "nested_loops": CProgram(Path("tests/c/valid/nested_loops.c"),),# 3),
     "return_2": CProgram(Path("tests/c/valid/return_2.c"),),# 2),

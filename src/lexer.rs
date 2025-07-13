@@ -15,9 +15,6 @@ pub struct LexerError {
     message: String,
 }
 
-// TODO: add line, column data to each token, so that the parser
-//       can report errors with line and column numbers.
-
 #[derive(PartialEq, Eq, Clone)]
 pub(crate) struct Token {
     pub(crate) kind: TokenKind,

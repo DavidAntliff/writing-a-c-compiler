@@ -505,8 +505,6 @@ fn loop_labeling(program: &mut Program) -> Result<(), Error> {
     let mut identifier_map = IdentifierMap::new();
     let mut id_gen = IdGenerator::new();
 
-    // TODO: for globals
-
     for declaration in &mut program.declarations {
         match declaration {
             Declaration::FunDecl(function) => {
@@ -1167,7 +1165,7 @@ fn goto_label_resolution(program: &mut Program) -> Result<LabelTable, Error> {
                 }
             }
             Declaration::VarDecl(_) => {
-                // TODO
+                // pass - variable declarations do not have labels
             }
         }
     }

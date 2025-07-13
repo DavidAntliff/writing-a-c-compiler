@@ -23,7 +23,6 @@
 use crate::ast_c;
 use crate::id_gen::IdGenerator;
 use crate::semantics::{IdentifierAttrs, InitialValue, SymbolTable};
-use crate::tacky::TopLevel::StaticVariable;
 use thiserror::Error;
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
@@ -143,12 +142,13 @@ pub(crate) fn emit_program(
     program: &ast_c::Program,
     symbol_table: &SymbolTable,
 ) -> Result<Program, TackyError> {
+    let mut id_gen = IdGenerator::new();
     let mut top_level = vec![];
 
     for declaration in &program.declarations {
         match declaration {
             ast_c::Declaration::FunDecl(fun_decl) => {
-                let fun_def = emit_function_definition(fun_decl, symbol_table);
+                let fun_def = emit_function_definition(fun_decl, &mut id_gen, symbol_table);
                 if let Some(fun_def) = fun_def {
                     top_level.push(TopLevel::Function(fun_def));
                 }
@@ -171,12 +171,12 @@ fn convert_symbols_to_tacky(symbol_table: &SymbolTable) -> Result<Vec<TopLevel>,
     for (name, entry) in symbol_table.iter_sorted() {
         if let IdentifierAttrs::Static { init, global } = &entry.attrs {
             match init {
-                InitialValue::Initial(i) => tacky_defs.push(StaticVariable {
+                InitialValue::Initial(i) => tacky_defs.push(TopLevel::StaticVariable {
                     name: name.into(),
                     global: *global,
                     init: *i,
                 }),
-                InitialValue::Tentative => tacky_defs.push(StaticVariable {
+                InitialValue::Tentative => tacky_defs.push(TopLevel::StaticVariable {
                     name: name.into(),
                     global: *global,
                     init: 0,
@@ -191,6 +191,7 @@ fn convert_symbols_to_tacky(symbol_table: &SymbolTable) -> Result<Vec<TopLevel>,
 
 fn emit_function_definition(
     function_decl: &ast_c::FunDecl,
+    id_gen: &mut IdGenerator,
     symbol_table: &SymbolTable,
 ) -> Option<Function> {
     // Drop function declarations without a body
@@ -204,7 +205,6 @@ fn emit_function_definition(
     let name: Identifier = (&function_decl.name).into();
 
     let mut instructions = vec![];
-    let mut id_gen = IdGenerator::new();
 
     let params = function_decl
         .params
@@ -212,7 +212,7 @@ fn emit_function_definition(
         .map(|p| Identifier(p.clone()))
         .collect::<Vec<_>>();
 
-    let val = emit_block(body, &mut instructions, &mut id_gen, symbol_table);
+    let val = emit_block(body, &mut instructions, id_gen, symbol_table);
     assert!(val.is_none(), "emit_block should return None");
 
     // Add a Return(0) to the end of all functions (see page 112)
@@ -440,7 +440,7 @@ fn emit_declaration(
 ) -> Option<Instruction> {
     match decl {
         ast_c::Declaration::FunDecl(decl) => {
-            let def = emit_function_definition(decl, symbol_table);
+            let def = emit_function_definition(decl, id_gen, symbol_table);
             assert_eq!(def, None, "Function declaration should not have a body");
         }
         ast_c::Declaration::VarDecl(decl) => {
@@ -1993,9 +1993,9 @@ mod tests {
                             Instruction::FunCall {
                                 name: "foo".into(),
                                 args: vec![Val::Constant(42), Val::Constant(77),],
-                                dst: Val::Var("tmp.0".into()),
+                                dst: Val::Var("tmp.1".into()),
                             },
-                            Instruction::Return(Val::Var("tmp.0".into())),
+                            Instruction::Return(Val::Var("tmp.1".into())),
                             // Default Return(0)
                             Instruction::Return(Val::Constant(0)),
                         ],
@@ -2060,7 +2060,6 @@ mod tests {
         let symbol_table = type_checking(&program).unwrap();
 
         // Expected TACKY:
-        // TODO
         assert_eq!(
             emit_program(&program, &symbol_table).unwrap(),
             Program {

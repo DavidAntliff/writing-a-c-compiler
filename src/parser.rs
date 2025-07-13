@@ -237,7 +237,7 @@ fn type_and_storage_class(i: &mut Tokens<'_>) -> ModalResult<(Type, Option<Stora
     }
 
     if types.len() != 1 {
-        fail.parse_next(i)?; // TODO: error message
+        fail.parse_next(i)?; // FIXME: error message
         // return Err(ErrMode::Cut(ParserError {
         //     message: "Invalid type specifier".to_string(),
         //     expected: "single type specifier".to_string(),
@@ -246,7 +246,7 @@ fn type_and_storage_class(i: &mut Tokens<'_>) -> ModalResult<(Type, Option<Stora
         // }));
     }
     if storage_classes.len() > 1 {
-        fail.parse_next(i)?; // TODO: error message
+        fail.parse_next(i)?; // FIXME: error message
         // return Err(ErrMode::Cut(ParserError {
         //     message: "Invalid storage class".to_string(),
         //     expected: "single storage class".to_string(),
@@ -810,7 +810,7 @@ fn for_init(i: &mut Tokens<'_>) -> ModalResult<ForInit> {
                 message: "Expected a variable declaration".to_string(),
                 expected: "variable declaration".to_string(),
                 found: format!("{x:?}"),
-                offset: 0, // TODO how do we get the offset here?
+                offset: 0, // FIXME how do we get the offset here?
             }),
         }),
         terminated(
