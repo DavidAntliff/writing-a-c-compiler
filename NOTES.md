@@ -95,3 +95,8 @@ Caller-Saved & Callee-Saved Registers:
 Stack Alignment:
  * The stack must be 16-byte aligned. I.e. `RSP` must be a multiple of 16 before a `call`.
 
+AT&T "longword" is 4 bytes, same as Intel's "doubleword".
+
+AT&T "quadword" is 8 bytes.
+
+

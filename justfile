@@ -1,5 +1,5 @@
 # test_compiler also tests previous chapters
-default: build test ch10 pytest
+default: build test ch11 pytest
 
 test_compiler := 'book-tests/test_compiler'
 #cc := './pcc.py'
@@ -122,3 +122,7 @@ ch10: build
     #{{test_compiler}} {{cc}} --chapter 10 --stage codegen
     #{{test_compiler}} {{cc}} --chapter 10
     {{test_compiler}} {{cc}} --chapter 10 --bitwise --goto
+
+
+ch11: build
+    {{test_compiler}} {{cc}} --chapter 11 --stage lex

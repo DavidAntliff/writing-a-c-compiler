@@ -44,7 +44,7 @@ use crate::ast_c::{
     BinaryOperator, Block, BlockItem, Declaration, Expression, ForInit, FunDecl, Program,
     Statement, StorageClass, UnaryOperator, VarDecl,
 };
-use crate::lexer::{Identifier, Keyword, Token, TokenKind};
+use crate::lexer::{Constant, Identifier, Keyword, Token, TokenKind};
 use crate::semantics::Type;
 use thiserror::Error;
 use winnow::combinator::{
@@ -939,7 +939,7 @@ fn identifier(i: &mut Tokens<'_>) -> ModalResult<Identifier> {
 fn int(i: &mut Tokens<'_>) -> ModalResult<usize> {
     let constant = any
         .try_map(|t: &Token| {
-            if let TokenKind::Constant(c) = t.kind {
+            if let TokenKind::Constant(Constant::Int(c)) = t.kind {
                 Ok(c)
             } else {
                 Err(ParserError {

@@ -1,12 +1,17 @@
 use thiserror::Error;
 use winnow::ascii::{alphanumeric0, digit1, multispace0};
-use winnow::combinator::{alt, not, repeat, terminated};
+use winnow::combinator::{alt, not, opt, repeat, terminated};
 use winnow::prelude::*;
 use winnow::stream::AsChar;
 use winnow::token::{one_of, take_while};
 use winnow::LocatingSlice;
 
-pub(crate) type Constant = usize;
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum Constant {
+    Int(usize),
+    Long(i64),
+}
+
 pub(crate) type Identifier = String;
 
 #[derive(Debug, PartialEq, Error)]
@@ -151,6 +156,7 @@ pub(crate) enum Keyword {
     Continue,
     Static,
     Extern,
+    Long,
 }
 
 pub(crate) fn lex(input: &str) -> Result<Vec<Token>, LexerError> {
@@ -213,18 +219,26 @@ fn token(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
     .parse_next(input)
 }
 
-// Parser for a single unsigned integer token:
+// Parser for a literal constant token:
 fn constant(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
     // Look ahead: the next character must not be a word character.
     terminated(
-        digit1,
+        (digit1, opt(one_of(['l', 'L']))),
         not(one_of(|c: char| c.is_alphanum() || c == '_')), // \b
     )
-    .parse_to::<Constant>()
     .with_span()
-    .map(|(constant, span)| Token {
-        kind: TokenKind::Constant(constant),
-        span,
+    .try_map(|((s, long), span): ((&str, Option<_>), _)| {
+        if long.is_some() {
+            s.parse::<i64>().map(|value| Token {
+                kind: TokenKind::Constant(Constant::Long(value)),
+                span,
+            })
+        } else {
+            s.parse::<usize>().map(|value| Token {
+                kind: TokenKind::Constant(Constant::Int(value)),
+                span,
+            })
+        }
     })
     .parse_next(input)
 }
@@ -337,6 +351,10 @@ fn identifier(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
         }),
         "extern" => Ok(Token {
             kind: TokenKind::Keyword(Keyword::Extern),
+            span,
+        }),
+        "long" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Long),
             span,
         }),
         _ => Ok(Token {
@@ -574,14 +592,15 @@ fn comma(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use winnow::error::ContextError;
+    use assert_matches::assert_matches;
+    use winnow::error::{ContextError, ParseError};
 
     #[test]
     fn test_lex() {
         assert_eq!(
             lex("123"),
             Ok(vec![Token {
-                kind: TokenKind::Constant(123),
+                kind: TokenKind::Constant(Constant::Int(123)),
                 span: 0..3
             },])
         );
@@ -589,7 +608,7 @@ mod tests {
             lex("123()"),
             Ok(vec![
                 Token {
-                    kind: TokenKind::Constant(123),
+                    kind: TokenKind::Constant(Constant::Int(123)),
                     span: 0..3
                 },
                 Token {
@@ -606,11 +625,11 @@ mod tests {
             lex("  123 \n  456 "),
             Ok(vec![
                 Token {
-                    kind: TokenKind::Constant(123),
+                    kind: TokenKind::Constant(Constant::Int(123)),
                     span: 2..5
                 },
                 Token {
-                    kind: TokenKind::Constant(456),
+                    kind: TokenKind::Constant(Constant::Int(456)),
                     span: 9..12
                 }
             ])
@@ -623,7 +642,7 @@ mod tests {
                     span: 0..1
                 },
                 Token {
-                    kind: TokenKind::Constant(123),
+                    kind: TokenKind::Constant(Constant::Int(123)),
                     span: 1..4
                 },
                 Token {
@@ -640,7 +659,7 @@ mod tests {
                     span: 0..1
                 },
                 Token {
-                    kind: TokenKind::Constant(123),
+                    kind: TokenKind::Constant(Constant::Int(123)),
                     span: 1..4
                 },
                 Token {
@@ -657,7 +676,7 @@ mod tests {
                     span: 1..2
                 },
                 Token {
-                    kind: TokenKind::Constant(123),
+                    kind: TokenKind::Constant(Constant::Int(123)),
                     span: 2..5
                 },
                 Token {
@@ -694,16 +713,34 @@ mod tests {
         assert_eq!(
             constant.parse(LocatingInput::new("0")),
             Ok(Token {
-                kind: TokenKind::Constant(0),
+                kind: TokenKind::Constant(Constant::Int(0)),
                 span: 0..1
             })
         );
         assert_eq!(
             constant.parse(LocatingInput::new("123")),
             Ok(Token {
-                kind: TokenKind::Constant(123),
+                kind: TokenKind::Constant(Constant::Int(123)),
                 span: 0..3
             })
+        );
+        assert_eq!(
+            constant.parse(LocatingInput::new("0l")),
+            Ok(Token {
+                kind: TokenKind::Constant(Constant::Long(0)),
+                span: 0..2
+            })
+        );
+        assert_eq!(
+            constant.parse(LocatingInput::new("123L")),
+            Ok(Token {
+                kind: TokenKind::Constant(Constant::Long(123)),
+                span: 0..4
+            })
+        );
+        assert_matches!(
+            constant.parse(LocatingInput::new("123K")),
+            Err(e @ ParseError { .. }) if e.offset() == 3
         );
     }
 
@@ -994,13 +1031,13 @@ mod tests {
         // but '123;bar' should not raise an error because 123 is followed by a semicolon, which
         // is a word boundary.
         let (_, t) = constant.parse_peek(LocatingInput::new("123;abc")).unwrap();
-        assert_eq!(t.kind, TokenKind::Constant(123));
+        assert_eq!(t.kind, TokenKind::Constant(Constant::Int(123)));
 
         let (_, t) = constant.parse_peek(LocatingInput::new("123 bar")).unwrap();
-        assert_eq!(t.kind, TokenKind::Constant(123));
+        assert_eq!(t.kind, TokenKind::Constant(Constant::Int(123)));
 
         let (_, t) = constant.parse_peek(LocatingInput::new("123(")).unwrap();
-        assert_eq!(t.kind, TokenKind::Constant(123));
+        assert_eq!(t.kind, TokenKind::Constant(Constant::Int(123)));
 
         let e = constant
             .parse_peek(LocatingInput::new("123abc"))
@@ -1047,7 +1084,7 @@ int main() {
                 span: 18..24,
             },
             Token {
-                kind: TokenKind::Constant(0),
+                kind: TokenKind::Constant(Constant::Int(0)),
                 span: 25..26,
             },
             Token {
