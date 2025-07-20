@@ -140,7 +140,7 @@ fn write_out_function<W: Write>(
 fn write_out_static_variable<W: Write>(
     name: Identifier,
     global: bool,
-    init: usize,
+    init: i64,
     writer: &mut BufWriter<W>,
 ) -> std::io::Result<()> {
     let symbol = &name.as_public_symbol();

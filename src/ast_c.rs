@@ -3,9 +3,11 @@
 //! ASDL:
 //!   program = Program(declaration*)
 //!   declaration = FunDecl(function_declaration) | VarDecl(variable_declaration)
-//!   variable_declaration = (identifier name, exp? init, storage_class?)
-//!   function_declaration = (identifier name, identifier* params,
-//!                           block? body, storage_class?)
+//!   variable_declaration = (identifier name, exp? init,
+//!                           type var_type, storage_class?)
+//!   function_declaration = (identifier name, identifier* params, block? body,
+//!                           type fun_type, storage_class?)
+//!   type = Int | Long | FunType(type* params, type ret)
 //!   storage_class = Static | Extern
 //!   block_item = S(statement) | D(declaration)
 //!   block = Block(block_item*)
@@ -22,8 +24,9 @@
 //!             | DoWhile(statement body, exp condition, identifier? loop_label)
 //!             | For(for_init init, exp? condition, exp? post, statement body, identifier? loop_label)
 //!             | Null
-//!   exp = Constant(int)
+//!   exp = Constant(const)
 //!       | Var(identifier)
+//!       | Cast(type target_type, exp)
 //!       | Unary(unary_operator, exp)
 //!       | Binary(binary_operator, exp, exp)
 //!       | Assignment(exp, exp)
@@ -34,6 +37,7 @@
 //!                   | BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
 //!                   | And | Or | Equal | NotEqual | LessThan | GreaterThan
 //!                   | LessOrEqual | GreaterOrEqual
+//!   const = ConstInt(int) | ConstLong(int)
 
 use crate::lexer::Identifier;
 use derive_more::Display;
@@ -46,31 +50,6 @@ pub(crate) struct Program {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct FunDecl {
-    pub(crate) name: Identifier,
-    pub(crate) params: Vec<Identifier>,
-    pub(crate) body: Option<Block>,
-    pub(crate) storage_class: Option<StorageClass>,
-}
-
-#[derive(Debug, Display, PartialEq, Clone)]
-pub enum StorageClass {
-    Static,
-    Extern,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Block {
-    pub(crate) items: Vec<BlockItem>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum BlockItem {
-    S(Statement),
-    D(Declaration),
-}
-
-#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Declaration {
     FunDecl(FunDecl),
     VarDecl(VarDecl),
@@ -80,7 +59,47 @@ pub(crate) enum Declaration {
 pub(crate) struct VarDecl {
     pub(crate) name: Identifier,
     pub(crate) init: Option<Expression>,
+    pub(crate) var_type: Type,
     pub(crate) storage_class: Option<StorageClass>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct FunDecl {
+    pub(crate) name: Identifier,
+    pub(crate) params: Vec<Identifier>,
+    pub(crate) body: Option<Block>,
+    pub(crate) fun_type: Type,
+    pub(crate) storage_class: Option<StorageClass>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum Type {
+    Int,
+    Long,
+    FunType { params: Vec<Type>, ret: Box<Type> },
+}
+
+#[derive(Debug, Display, PartialEq, Clone)]
+pub enum StorageClass {
+    Static,
+    Extern,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum BlockItem {
+    S(Statement),
+    D(Declaration),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct Block {
+    pub(crate) items: Vec<BlockItem>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum ForInit {
+    InitDecl(VarDecl),
+    InitExp(Option<Expression>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -121,15 +140,10 @@ pub(crate) enum Statement {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum ForInit {
-    InitDecl(VarDecl),
-    InitExp(Option<Expression>),
-}
-
-#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Expression {
-    Constant(usize),
+    Constant(Const),
     Var(Identifier),
+    Cast(Type, Box<Expression>),
     Unary(UnaryOperator, Box<Expression>),
     Binary(BinaryOperator, Box<Expression>, Box<Expression>),
     Assignment(Box<Expression>, Box<Expression>),
@@ -164,4 +178,10 @@ pub(crate) enum BinaryOperator {
     GreaterThan,
     LessOrEqual,
     GreaterOrEqual,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum Const {
+    ConstInt(i32),
+    ConstLong(i64),
 }

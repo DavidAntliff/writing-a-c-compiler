@@ -8,7 +8,7 @@ use winnow::LocatingSlice;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum Constant {
-    Int(usize),
+    Int(i64), // intentionally larger, in case we need to use a Long in the parser
     Long(i64),
 }
 
@@ -144,6 +144,7 @@ impl TokenKind {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum Keyword {
     Int,
+    Long,
     Void,
     Return,
     If,
@@ -156,7 +157,6 @@ pub(crate) enum Keyword {
     Continue,
     Static,
     Extern,
-    Long,
 }
 
 pub(crate) fn lex(input: &str) -> Result<Vec<Token>, LexerError> {
@@ -234,7 +234,7 @@ fn constant(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
                 span,
             })
         } else {
-            s.parse::<usize>().map(|value| Token {
+            s.parse::<i64>().map(|value| Token {
                 kind: TokenKind::Constant(Constant::Int(value)),
                 span,
             })
@@ -305,6 +305,10 @@ fn identifier(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
             kind: TokenKind::Keyword(Keyword::Int),
             span,
         }),
+        "long" => Ok(Token {
+            kind: TokenKind::Keyword(Keyword::Long),
+            span,
+        }),
         "void" => Ok(Token {
             kind: TokenKind::Keyword(Keyword::Void),
             span,
@@ -351,10 +355,6 @@ fn identifier(input: &mut LocatingInput<'_>) -> winnow::Result<Token> {
         }),
         "extern" => Ok(Token {
             kind: TokenKind::Keyword(Keyword::Extern),
-            span,
-        }),
-        "long" => Ok(Token {
-            kind: TokenKind::Keyword(Keyword::Long),
             span,
         }),
         _ => Ok(Token {

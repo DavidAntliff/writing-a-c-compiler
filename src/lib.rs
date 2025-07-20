@@ -204,7 +204,7 @@ mod tests {
     use emitter::abi::{FOOTER, PUBLIC_PREFIX};
     use std::io::BufWriter;
 
-    use crate::ast_c::{Block, BlockItem, Expression, FunDecl, Program, Statement};
+    use crate::ast_c::{Block, BlockItem, Const, Expression, FunDecl, Program, Statement, Type};
     use crate::parser::ParserError;
     use crate::semantics::SymbolTable;
     use assert_matches::assert_matches;
@@ -322,8 +322,14 @@ mod tests {
                     name: "main".into(),
                     params: vec![],
                     body: Some(Block {
-                        items: vec![BlockItem::S(Statement::Return(Expression::Constant(2)))]
+                        items: vec![BlockItem::S(Statement::Return(Expression::Constant(
+                            Const::ConstInt(2)
+                        )))]
                     }),
+                    fun_type: Type::FunType {
+                        params: vec![],
+                        ret: Box::new(Type::Int),
+                    },
                     storage_class: None,
                 })]
             }

@@ -59,7 +59,7 @@ pub(crate) enum TopLevel {
     StaticVariable {
         name: Identifier,
         global: bool,
-        init: usize,
+        init: i64,
     },
 }
 
@@ -295,7 +295,7 @@ impl Display for BinaryOperator {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Operand {
-    Imm(usize),
+    Imm(i64),
     Reg(Reg),
     Pseudo(Identifier),
     /// Stack offset in bytes

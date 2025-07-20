@@ -5,8 +5,10 @@
 //!   <declaration> ::= <variable-declaration> | <function-declaration>
 //!   <variable-declaration> ::= { <specifier> }+ <identifier> [ "=" <exp> ] ";"
 //!   <function-declaration> ::= { <specifier> }+ <identifier> "(" <param-list> ")" ( <block> | ";" )
-//!   <param-list> ::= "void" | "int" <identifier> { "," "int" <identifier> }
-//!   <specifier> ::= "int" | "static" | "extern"
+//!   <param-list> ::= "void"
+//!                  | { <type-specifier> }+ <identifier> { "," { <type-specifier> }+ <identifier> }
+//!   <type-specifier> ::= "int" | "long"
+//!   <specifier> ::= <type-specifier> | "static" | "extern"
 //!   <block> ::= "{" { <block-item> } "}"
 //!   <block-item> ::= <statement> | <declaration>
 //!   <for-init> ::= <variable-declaration> | [ <exp> ] ";"
@@ -25,8 +27,9 @@
 //!   <exp> ::= <factor>
 //!           | <exp> <binop> <exp>
 //!           | <exp> "?" <exp> ":" <exp>
-//!   <factor> ::= <int>
+//!   <factor> ::= <const>
 //!              | <identifier>
+//!              | "(" { <type-specifier> }+ ")" <factor>
 //!              | <unop> <factor>
 //!              | "(" <exp> ")"
 //!              | <identifier> "(" [ <argument-list> ] ")"
@@ -36,22 +39,23 @@
 //!               "&" | "|" | "^" | "<<" | ">>"
 //!               "&&" | "||" | "==" | "!="
 //!               "<" | "<=" | ">" | ">="
+//!   <const> ::= <int> | <long>
 //!   <identifier> ::= ? An identifier token ?
-//!   <int> ::= ? A constant token ?
+//!   <int> ::= ? An int token ?
+//!   <long> ::= ? An int or long token ?
 //!
 
 use crate::ast_c::{
-    BinaryOperator, Block, BlockItem, Declaration, Expression, ForInit, FunDecl, Program,
-    Statement, StorageClass, UnaryOperator, VarDecl,
+    BinaryOperator, Block, BlockItem, Const, Declaration, Expression, ForInit, FunDecl, Program,
+    Statement, StorageClass, Type, UnaryOperator, VarDecl,
 };
 use crate::lexer::{Constant, Identifier, Keyword, Token, TokenKind};
-use crate::semantics::Type;
 use thiserror::Error;
 use winnow::combinator::{
-    alt, cut_err, fail, opt, peek, preceded, repeat, repeat_till, separated, terminated, trace,
+    alt, cut_err, fail, opt, peek, repeat, repeat_till, separated, terminated, trace,
 };
 use winnow::dispatch;
-use winnow::error::{StrContext, StrContextValue};
+use winnow::error::{AddContext, ContextError, ErrMode, StrContext, StrContextValue};
 use winnow::prelude::*;
 use winnow::stream::TokenSlice;
 use winnow::token::{any, literal, take};
@@ -180,7 +184,7 @@ fn program(i: &mut Tokens<'_>) -> ModalResult<Program> {
 }
 
 fn function_declaration(i: &mut Tokens<'_>) -> ModalResult<FunDecl> {
-    let (_type_, storage_class) = type_and_storage_class
+    let (ret_type, storage_class) = type_and_storage_class
         .context(StrContext::Label("function"))
         .context(StrContext::Expected(StrContextValue::Description(
             "specifier",
@@ -197,7 +201,9 @@ fn function_declaration(i: &mut Tokens<'_>) -> ModalResult<FunDecl> {
             )))
             .parse_next(i)?;
 
-        let params = parameter_list.parse_next(i)?;
+        let param_list = parameter_list.parse_next(i)?;
+
+        let (param_types, param_identifiers) = param_list.into_iter().unzip();
 
         let body = alt((block.map(Some), literal(TokenKind::Semicolon).map(|_| None)))
             .context(StrContext::Label("function"))
@@ -206,8 +212,12 @@ fn function_declaration(i: &mut Tokens<'_>) -> ModalResult<FunDecl> {
 
         Ok(FunDecl {
             name,
-            params,
+            params: param_identifiers,
             body,
+            fun_type: Type::FunType {
+                params: param_types,
+                ret: Box::new(ret_type.clone()),
+            },
             storage_class: storage_class.clone(),
         })
     })
@@ -215,10 +225,12 @@ fn function_declaration(i: &mut Tokens<'_>) -> ModalResult<FunDecl> {
 }
 
 fn type_and_storage_class(i: &mut Tokens<'_>) -> ModalResult<(Type, Option<StorageClass>)> {
+    // TODO can this be improved, without using .value() for each branch?
     let specifiers: Vec<Keyword> = repeat(
         0..,
         alt((
             literal(TokenKind::Keyword(Keyword::Int)).value(Keyword::Int),
+            literal(TokenKind::Keyword(Keyword::Long)).value(Keyword::Long),
             literal(TokenKind::Keyword(Keyword::Static)).value(Keyword::Static),
             literal(TokenKind::Keyword(Keyword::Extern)).value(Keyword::Extern),
         )),
@@ -228,33 +240,35 @@ fn type_and_storage_class(i: &mut Tokens<'_>) -> ModalResult<(Type, Option<Stora
     let mut types = vec![];
     let mut storage_classes = vec![];
 
+    // TODO: beware having to list all types here again:
     for specifier in specifiers {
-        if specifier == Keyword::Int {
+        if specifier == Keyword::Int || specifier == Keyword::Long {
             types.push(specifier);
         } else {
             storage_classes.push(specifier);
         }
     }
 
-    if types.len() != 1 {
-        fail.parse_next(i)?; // FIXME: error message
-        // return Err(ErrMode::Cut(ParserError {
-        //     message: "Invalid type specifier".to_string(),
-        //     expected: "single type specifier".to_string(),
-        //     found: "".into(),
-        //     offset: 0, // TODO how do we get the offset here?
-        // }));
-    }
+    let cp = i.checkpoint();
+    let type_ = to_type(&types).map_err(|_| {
+        ErrMode::Backtrack(
+            ContextError::new()
+                .add_context(i, &cp, StrContext::Label("type"))
+                .add_context(
+                    i,
+                    &cp,
+                    StrContext::Expected(StrContextValue::Description("type specifier")),
+                ),
+        )
+    })?;
+
     if storage_classes.len() > 1 {
-        fail.parse_next(i)?; // FIXME: error message
-        // return Err(ErrMode::Cut(ParserError {
-        //     message: "Invalid storage class".to_string(),
-        //     expected: "single storage class".to_string(),
-        //     found: "".into(),
-        //     offset: 0, // TODO how do we get the offset here?
-        // }));
+        fail.context(StrContext::Label("type and storage class"))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "valid storage class",
+            )))
+            .parse_next(i)?;
     }
-    let type_ = Type::Int;
 
     let storage_class = if storage_classes.len() == 1
         && let Some(class) = storage_classes.first()
@@ -275,36 +289,75 @@ fn to_storage_class(keyword: &Keyword) -> Option<StorageClass> {
     }
 }
 
-fn parameter_list(i: &mut Tokens<'_>) -> ModalResult<Vec<Identifier>> {
+fn to_type(specifiers: &[Keyword]) -> Result<Type, ParserError> {
+    match specifiers {
+        [Keyword::Int] => Ok(Type::Int),
+        [Keyword::Int, Keyword::Long] | [Keyword::Long, Keyword::Int] | [Keyword::Long] => {
+            Ok(Type::Long)
+        }
+        _ => Err(ParserError {
+            message: "Invalid type specifiers".to_string(),
+            expected: "valid type specifier combination".to_string(),
+            found: format!("{:?}", specifiers),
+            offset: 0, // Hmmm....
+        }),
+    }
+}
+
+fn parameter_list(i: &mut Tokens<'_>) -> ModalResult<Vec<(Type, Identifier)>> {
+    // e.g.
+    //   (void) -> []
+    //   (int foo, long int bar, long baz) ->
+    //      [ (Type::Int, "foo"), (Type::Long, "bar"), (Type::Long, "baz") ]
+
+    // "("
     literal(TokenKind::OpenParen)
         .context(StrContext::Label("parameter list"))
         .context(StrContext::Expected(StrContextValue::StringLiteral("(")))
         .parse_next(i)?;
 
-    let parameters = alt((
-        literal(TokenKind::Keyword(Keyword::Void)).map(|_| vec![]),
-        separated(
-            // no parameters means an unspecified number of parameters, which we don't support yet
-            1..,
-            preceded(
-                literal(TokenKind::Keyword(Keyword::Int))
-                    .context(StrContext::Label("parameter list"))
-                    .context(StrContext::Expected(StrContextValue::Description("int"))),
-                identifier
-                    .context(StrContext::Label("parameter list"))
-                    .context(StrContext::Expected(StrContextValue::Description(
-                        "identifier",
-                    ))),
-            ),
-            literal(TokenKind::Comma)
-                .context(StrContext::Label("parameter list"))
-                .context(StrContext::Expected(StrContextValue::StringLiteral(","))),
-        ),
-        fail.context(StrContext::Label("parameter list"))
-            .context(StrContext::Expected(StrContextValue::Description(
-                "keyword",
-            ))),
+    // "void"
+    let void = literal(TokenKind::Keyword(Keyword::Void))
+        .context(StrContext::Label("parameter list"))
+        .context(StrContext::Expected(StrContextValue::Description("void")));
+
+    // "int", "int long", "long int", etc
+    let type_specifier = repeat(
+        1..,
+        alt((
+            literal(TokenKind::Keyword(Keyword::Int)).value(Keyword::Int),
+            literal(TokenKind::Keyword(Keyword::Long)).value(Keyword::Long),
+        )),
+    )
+    .try_map(|v: Vec<Keyword>| to_type(&v))
+    .context(StrContext::Label("parameter list"))
+    .context(StrContext::Expected(StrContextValue::Description(
+        "keyword",
+    )));
+
+    // parameter name
+    let name = identifier
+        .context(StrContext::Label("parameter list"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "identifier",
+        )));
+
+    // parameter type and name
+    let parameter = (type_specifier, name)
+        .context(StrContext::Label("parameter list"))
+        .context(StrContext::Expected(StrContextValue::Description(
+            "parameter type and name",
+        )));
+
+    // parameter list
+    let parameters: Vec<(Type, Identifier)> = alt((
+        void.map(|_| vec![]),
+        separated(1.., parameter, literal(TokenKind::Comma)),
     ))
+    .context(StrContext::Label("parameter list"))
+    .context(StrContext::Expected(StrContextValue::Description(
+        "parameter list or void",
+    )))
     .parse_next(i)?;
 
     literal(TokenKind::CloseParen)
@@ -387,7 +440,7 @@ fn declaration(i: &mut Tokens<'_>) -> ModalResult<Declaration> {
 }
 
 fn variable_declaration(i: &mut Tokens<'_>) -> ModalResult<VarDecl> {
-    let (_type_, storage_class) = type_and_storage_class
+    let (var_type, storage_class) = type_and_storage_class
         .context(StrContext::Label("variable declaration"))
         .context(StrContext::Expected(StrContextValue::Description(
             "specifier",
@@ -431,6 +484,7 @@ fn variable_declaration(i: &mut Tokens<'_>) -> ModalResult<VarDecl> {
     Ok(VarDecl {
         name,
         init,
+        var_type,
         storage_class,
     })
 }
@@ -866,7 +920,7 @@ fn factor(i: &mut Tokens<'_>) -> ModalResult<Expression> {
     trace("factor", |i: &mut _| {
         let next_token: &Token = peek(any).parse_next(i)?;
         let exp = match &next_token.kind {
-            TokenKind::Constant(_) => Expression::Constant(int.parse_next(i)?),
+            TokenKind::Constant(_) => Expression::Constant(constant.parse_next(i)?),
             TokenKind::Identifier(identifier) => {
                 take(1usize).parse_next(i)?;
 
@@ -885,18 +939,55 @@ fn factor(i: &mut Tokens<'_>) -> ModalResult<Expression> {
                 let inner_exp = factor.parse_next(i)?;
                 Expression::Unary(op, Box::new(inner_exp))
             }
-            TokenKind::OpenParen => {
-                take(1usize).parse_next(i)?;
-                let inner_exp = exp_internal(i, 0)?;
-                literal(TokenKind::CloseParen).parse_next(i)?;
-                inner_exp
-            }
+            TokenKind::OpenParen => alt((cast, exp_parens)).parse_next(i)?,
             _ => fail.context(StrContext::Label("factor")).parse_next(i)?,
         };
 
         Ok(exp)
     })
     .parse_next(i)
+}
+
+fn exp_parens(i: &mut Tokens<'_>) -> ModalResult<Expression> {
+    literal(TokenKind::OpenParen)
+        .context(StrContext::Label("expression in parentheses"))
+        .context(StrContext::Expected(StrContextValue::StringLiteral("(")))
+        .parse_next(i)?;
+    let exp = exp_internal(i, 0)?;
+    literal(TokenKind::CloseParen)
+        .context(StrContext::Label("expression in parentheses"))
+        .context(StrContext::Expected(StrContextValue::StringLiteral(")")))
+        .parse_next(i)?;
+    Ok(exp)
+}
+
+fn cast(i: &mut Tokens<'_>) -> ModalResult<Expression> {
+    literal(TokenKind::OpenParen)
+        .context(StrContext::Label("cast expression"))
+        .context(StrContext::Expected(StrContextValue::StringLiteral("(")))
+        .parse_next(i)?;
+
+    let type_ = repeat(
+        1..,
+        alt((
+            literal(TokenKind::Keyword(Keyword::Int)).value(Keyword::Int),
+            literal(TokenKind::Keyword(Keyword::Long)).value(Keyword::Long),
+        )),
+    )
+    .try_map(|v: Vec<Keyword>| to_type(&v))
+    .context(StrContext::Label("parameter list"))
+    .context(StrContext::Expected(StrContextValue::Description(
+        "keyword",
+    )))
+    .parse_next(i)?;
+
+    literal(TokenKind::CloseParen)
+        .context(StrContext::Label("expression in parentheses"))
+        .context(StrContext::Expected(StrContextValue::StringLiteral(")")))
+        .parse_next(i)?;
+
+    let factor = factor.parse_next(i)?;
+    Ok(Expression::Cast(type_, factor.into()))
 }
 
 fn conditional_middle(i: &mut Tokens<'_>) -> ModalResult<Expression> {
@@ -936,21 +1027,45 @@ fn identifier(i: &mut Tokens<'_>) -> ModalResult<Identifier> {
     Ok(identifier)
 }
 
-fn int(i: &mut Tokens<'_>) -> ModalResult<usize> {
+fn constant(i: &mut Tokens<'_>) -> ModalResult<Const> {
     let constant = any
         .try_map(|t: &Token| {
-            if let TokenKind::Constant(Constant::Int(c)) = t.kind {
-                Ok(c)
-            } else {
-                Err(ParserError {
-                    message: "Expected a constant".to_string(),
-                    expected: "constant".to_string(),
-                    found: format!("{:?}", t.kind),
-                    offset: t.span.start,
-                })
-            }
+            let c = match &t.kind {
+                TokenKind::Constant(c) => {
+                    let v = match c {
+                        Constant::Int(c) => *c as i64,
+                        Constant::Long(c) => *c,
+                    };
+
+                    // TODO: maybe the internal type of the constant should be unsigned? Negative is a separate operator.
+                    //       But how does this work for constant initialisers?
+                    if v > i64::MAX {
+                        return Err(ParserError {
+                            message: "Constant is too large to represent an int or long"
+                                .to_string(),
+                            expected: "constant".to_string(),
+                            found: format!("{:?}", t.kind),
+                            offset: t.span.start,
+                        });
+                    }
+
+                    match c {
+                        Constant::Int(_) if v <= i32::MAX.into() => Const::ConstInt(v as i32), // safe due to guard
+                        _ => Const::ConstLong(v),
+                    }
+                }
+                _ => {
+                    return Err(ParserError {
+                        message: "Expected a constant".to_string(),
+                        expected: "constant".to_string(),
+                        found: format!("{:?}", t.kind),
+                        offset: t.span.start,
+                    });
+                }
+            };
+            Ok(c)
         })
-        .context(StrContext::Label("int"))
+        .context(StrContext::Label("constant"))
         .parse_next(i)?;
     Ok(constant)
 }
@@ -1057,7 +1172,7 @@ mod tests {
     fn test_expression_constant() {
         let input = r#"2"#;
         let ast = parse_expression(input);
-        assert_eq!(ast, Expression::Constant(2));
+        assert_eq!(ast, Expression::Constant(Const::ConstInt(2)));
     }
 
     #[test]
@@ -1066,7 +1181,10 @@ mod tests {
         let ast = parse_expression(input);
         assert_eq!(
             ast,
-            Expression::Unary(UnaryOperator::Complement, Box::new(Expression::Constant(2)))
+            Expression::Unary(
+                UnaryOperator::Complement,
+                Box::new(Expression::Constant(Const::ConstInt(2)))
+            )
         );
     }
 
@@ -1076,7 +1194,10 @@ mod tests {
         let ast = parse_expression(input);
         assert_eq!(
             ast,
-            Expression::Unary(UnaryOperator::Negate, Box::new(Expression::Constant(3)))
+            Expression::Unary(
+                UnaryOperator::Negate,
+                Box::new(Expression::Constant(Const::ConstInt(3)))
+            )
         );
     }
 
@@ -1090,7 +1211,7 @@ mod tests {
                 UnaryOperator::Complement,
                 Box::new(Expression::Unary(
                     UnaryOperator::Negate,
-                    Box::new(Expression::Constant(4))
+                    Box::new(Expression::Constant(Const::ConstInt(4)))
                 ))
             )
         );
@@ -1114,11 +1235,11 @@ mod tests {
             ast,
             Expression::Binary(
                 BinaryOperator::Add,
-                Box::new(Expression::Constant(1)),
+                Box::new(Expression::Constant(Const::ConstInt(1))),
                 Box::new(Expression::Binary(
                     BinaryOperator::Multiply,
-                    Box::new(Expression::Constant(2)),
-                    Box::new(Expression::Constant(3))
+                    Box::new(Expression::Constant(Const::ConstInt(2))),
+                    Box::new(Expression::Constant(Const::ConstInt(3)))
                 ))
             )
         );
@@ -1135,10 +1256,10 @@ mod tests {
                 BinaryOperator::Multiply,
                 Box::new(Expression::Binary(
                     BinaryOperator::Add,
-                    Box::new(Expression::Constant(1)),
-                    Box::new(Expression::Constant(2))
+                    Box::new(Expression::Constant(Const::ConstInt(1))),
+                    Box::new(Expression::Constant(Const::ConstInt(2)))
                 )),
-                Box::new(Expression::Constant(3)),
+                Box::new(Expression::Constant(Const::ConstInt(3))),
             )
         );
     }
@@ -1153,16 +1274,16 @@ mod tests {
                 BinaryOperator::Subtract,
                 Box::new(Expression::Binary(
                     BinaryOperator::Multiply,
-                    Box::new(Expression::Constant(1)),
-                    Box::new(Expression::Constant(2))
+                    Box::new(Expression::Constant(Const::ConstInt(1))),
+                    Box::new(Expression::Constant(Const::ConstInt(2)))
                 )),
                 Box::new(Expression::Binary(
                     BinaryOperator::Multiply,
-                    Box::new(Expression::Constant(3)),
+                    Box::new(Expression::Constant(Const::ConstInt(3))),
                     Box::new(Expression::Binary(
                         BinaryOperator::Add,
-                        Box::new(Expression::Constant(4)),
-                        Box::new(Expression::Constant(5))
+                        Box::new(Expression::Constant(Const::ConstInt(4))),
+                        Box::new(Expression::Constant(Const::ConstInt(5)))
                     ))
                 ))
             )
@@ -1182,19 +1303,19 @@ mod tests {
                 BinaryOperator::BitOr,
                 Box::new(Expression::Binary(
                     BinaryOperator::ShiftRight,
-                    Box::new(Expression::Constant(80)),
-                    Box::new(Expression::Constant(2))
+                    Box::new(Expression::Constant(Const::ConstInt(80))),
+                    Box::new(Expression::Constant(Const::ConstInt(2)))
                 )),
                 Box::new(Expression::Binary(
                     BinaryOperator::BitXor,
-                    Box::new(Expression::Constant(1)),
+                    Box::new(Expression::Constant(Const::ConstInt(1))),
                     Box::new(Expression::Binary(
                         BinaryOperator::BitAnd,
-                        Box::new(Expression::Constant(5)),
+                        Box::new(Expression::Constant(Const::ConstInt(5))),
                         Box::new(Expression::Binary(
                             BinaryOperator::ShiftLeft,
-                            Box::new(Expression::Constant(7)),
-                            Box::new(Expression::Constant(1))
+                            Box::new(Expression::Constant(Const::ConstInt(7))),
+                            Box::new(Expression::Constant(Const::ConstInt(1)))
                         ))
                     ))
                 ))
@@ -1217,24 +1338,24 @@ mod tests {
                     BinaryOperator::Or,
                     Box::new(Expression::Binary(
                         BinaryOperator::And,
-                        Box::new(Expression::Constant(80)),
+                        Box::new(Expression::Constant(Const::ConstInt(80))),
                         Box::new(Expression::Binary(
                             BinaryOperator::Equal,
-                            Box::new(Expression::Constant(2)),
-                            Box::new(Expression::Constant(1))
+                            Box::new(Expression::Constant(Const::ConstInt(2))),
+                            Box::new(Expression::Constant(Const::ConstInt(1)))
                         )),
                     )),
                     Box::new(Expression::Binary(
                         BinaryOperator::And,
                         Box::new(Expression::Binary(
                             BinaryOperator::LessOrEqual,
-                            Box::new(Expression::Constant(5)),
-                            Box::new(Expression::Constant(7))
+                            Box::new(Expression::Constant(Const::ConstInt(5))),
+                            Box::new(Expression::Constant(Const::ConstInt(7)))
                         )),
                         Box::new(Expression::Binary(
                             BinaryOperator::GreaterThan,
-                            Box::new(Expression::Constant(2)),
-                            Box::new(Expression::Constant(1))
+                            Box::new(Expression::Constant(Const::ConstInt(2))),
+                            Box::new(Expression::Constant(Const::ConstInt(1)))
                         ))
                     ))
                 ))
@@ -1264,19 +1385,24 @@ mod tests {
                             BlockItem::D(Declaration::VarDecl(VarDecl {
                                 name: "a".into(),
                                 init: None,
+                                var_type: Type::Int,
                                 storage_class: None,
                             })),
                             BlockItem::S(Statement::Expression(Expression::Assignment(
                                 Box::new(Expression::Var("a".into())),
-                                Box::new(Expression::Constant(2))
+                                Box::new(Expression::Constant(Const::ConstInt(2)))
                             ))),
                             BlockItem::S(Statement::Return(Expression::Binary(
                                 BinaryOperator::Multiply,
                                 Box::new(Expression::Var("a".into())),
-                                Box::new(Expression::Constant(2))
+                                Box::new(Expression::Constant(Const::ConstInt(2)))
                             )))
                         ]
                     }),
+                    fun_type: Type::FunType {
+                        params: vec![],
+                        ret: Box::new(Type::Int),
+                    },
                     storage_class: None,
                 })]
             }
@@ -1301,17 +1427,19 @@ mod tests {
                 condition: Expression::Binary(
                     BinaryOperator::GreaterThan,
                     Box::new(Expression::Var("a".into())),
-                    Box::new(Expression::Constant(100))
+                    Box::new(Expression::Constant(Const::ConstInt(100)))
                 ),
-                then: Box::new(Statement::Return(Expression::Constant(0))),
+                then: Box::new(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
                 else_: Some(Box::new(Statement::If {
                     condition: Expression::Binary(
                         BinaryOperator::GreaterThan,
                         Box::new(Expression::Var("a".into())),
-                        Box::new(Expression::Constant(50))
+                        Box::new(Expression::Constant(Const::ConstInt(50)))
                     ),
-                    then: Box::new(Statement::Return(Expression::Constant(1))),
-                    else_: Some(Box::new(Statement::Return(Expression::Constant(2))))
+                    then: Box::new(Statement::Return(Expression::Constant(Const::ConstInt(1)))),
+                    else_: Some(Box::new(Statement::Return(Expression::Constant(
+                        Const::ConstInt(2)
+                    ))))
                 }))
             }
         )
@@ -1328,9 +1456,9 @@ mod tests {
             Expression::Assignment(
                 Box::new(Expression::Var("a".into())),
                 Box::new(Expression::Conditional(
-                    Box::new(Expression::Constant(1)),
-                    Box::new(Expression::Constant(2)),
-                    Box::new(Expression::Constant(3))
+                    Box::new(Expression::Constant(Const::ConstInt(1))),
+                    Box::new(Expression::Constant(Const::ConstInt(2))),
+                    Box::new(Expression::Constant(Const::ConstInt(3)))
                 ))
             )
         )
@@ -1351,8 +1479,8 @@ mod tests {
                     Box::new(Expression::Var("a".into())),
                     Box::new(Expression::Var("b".into()))
                 )),
-                Box::new(Expression::Constant(2)),
-                Box::new(Expression::Constant(3))
+                Box::new(Expression::Constant(Const::ConstInt(2))),
+                Box::new(Expression::Constant(Const::ConstInt(3)))
             )
         )
     }
@@ -1367,12 +1495,12 @@ mod tests {
         assert_eq!(
             ast,
             Expression::Conditional(
-                Box::new(Expression::Constant(1)),
-                Box::new(Expression::Constant(2)),
+                Box::new(Expression::Constant(Const::ConstInt(1))),
+                Box::new(Expression::Constant(Const::ConstInt(2))),
                 Box::new(Expression::Binary(
                     BinaryOperator::Or,
-                    Box::new(Expression::Constant(3)),
-                    Box::new(Expression::Constant(4))
+                    Box::new(Expression::Constant(Const::ConstInt(3))),
+                    Box::new(Expression::Constant(Const::ConstInt(4)))
                 )),
             )
         )
@@ -1391,9 +1519,9 @@ mod tests {
                 Box::new(Expression::Var("x".into())),
                 Box::new(Expression::Assignment(
                     Box::new(Expression::Var("x".into())),
-                    Box::new(Expression::Constant(1))
+                    Box::new(Expression::Constant(Const::ConstInt(1)))
                 )),
-                Box::new(Expression::Constant(2)),
+                Box::new(Expression::Constant(Const::ConstInt(2))),
             )
         )
     }
@@ -1411,10 +1539,10 @@ mod tests {
                 Box::new(Expression::Var("a".into())),
                 Box::new(Expression::Conditional(
                     Box::new(Expression::Var("b".into())),
-                    Box::new(Expression::Constant(1)),
-                    Box::new(Expression::Constant(2)),
+                    Box::new(Expression::Constant(Const::ConstInt(1))),
+                    Box::new(Expression::Constant(Const::ConstInt(2))),
                 )),
-                Box::new(Expression::Constant(3)),
+                Box::new(Expression::Constant(Const::ConstInt(3))),
             )
         )
     }
@@ -1430,11 +1558,11 @@ mod tests {
             ast,
             Expression::Conditional(
                 Box::new(Expression::Var("a".into())),
-                Box::new(Expression::Constant(1)),
+                Box::new(Expression::Constant(Const::ConstInt(1))),
                 Box::new(Expression::Conditional(
                     Box::new(Expression::Var("b".into())),
-                    Box::new(Expression::Constant(2)),
-                    Box::new(Expression::Constant(3)),
+                    Box::new(Expression::Constant(Const::ConstInt(2))),
+                    Box::new(Expression::Constant(Const::ConstInt(3))),
                 )),
             )
         )
@@ -1465,10 +1593,16 @@ mod tests {
                         }),
                         BlockItem::S(Statement::Labeled {
                             label: "label1".into(),
-                            statement: Box::new(Statement::Return(Expression::Constant(0)))
+                            statement: Box::new(Statement::Return(Expression::Constant(
+                                Const::ConstInt(0)
+                            )))
                         })
                     ]
                 }),
+                fun_type: Type::FunType {
+                    params: vec![],
+                    ret: Box::new(Type::Int),
+                },
                 storage_class: None,
             }
         );
@@ -1500,12 +1634,18 @@ mod tests {
                             label: "labelA".into(),
                             statement: Box::new(Statement::Labeled {
                                 label: "labelB".into(),
-                                statement: Box::new(Statement::Return(Expression::Constant(5)))
+                                statement: Box::new(Statement::Return(Expression::Constant(
+                                    Const::ConstInt(5)
+                                )))
                             })
                         }),
-                        BlockItem::S(Statement::Return(Expression::Constant(0))),
+                        BlockItem::S(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
                     ]
                 }),
+                fun_type: Type::FunType {
+                    params: vec![],
+                    ret: Box::new(Type::Int),
+                },
                 storage_class: None,
             }
         );
@@ -1533,17 +1673,23 @@ mod tests {
                 body: Some(Block {
                     items: vec![
                         BlockItem::S(Statement::If {
-                            condition: Expression::Constant(0),
+                            condition: Expression::Constant(Const::ConstInt(0)),
                             then: Box::new(Statement::Labeled {
                                 label: "label".into(),
-                                statement: Box::new(Statement::Return(Expression::Constant(5)))
+                                statement: Box::new(Statement::Return(Expression::Constant(
+                                    Const::ConstInt(5)
+                                )))
                             }),
                             else_: None,
                         }),
                         BlockItem::S(Statement::Goto("label".into())),
-                        BlockItem::S(Statement::Return(Expression::Constant(0))),
+                        BlockItem::S(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
                     ]
                 }),
+                fun_type: Type::FunType {
+                    params: vec![],
+                    ret: Box::new(Type::Int),
+                },
                 storage_class: None,
             }
         );
@@ -1577,33 +1723,40 @@ mod tests {
                     items: vec![
                         BlockItem::D(Declaration::VarDecl(VarDecl {
                             name: "x".into(),
-                            init: Some(Expression::Constant(1)),
+                            init: Some(Expression::Constant(Const::ConstInt(1))),
+                            var_type: Type::Int,
                             storage_class: None,
                         })),
                         BlockItem::S(Statement::Compound(Block {
                             items: vec![
                                 BlockItem::D(Declaration::VarDecl(VarDecl {
                                     name: "x".into(),
-                                    init: Some(Expression::Constant(2)),
+                                    init: Some(Expression::Constant(Const::ConstInt(2))),
+                                    var_type: Type::Int,
                                     storage_class: None,
                                 })),
                                 BlockItem::S(Statement::If {
                                     condition: Expression::Binary(
                                         BinaryOperator::GreaterThan,
                                         Box::new(Expression::Var("x".into())),
-                                        Box::new(Expression::Constant(1))
+                                        Box::new(Expression::Constant(Const::ConstInt(1)))
                                     ),
                                     then: Box::new(Statement::Compound(Block {
                                         items: vec![
                                             BlockItem::S(Statement::Expression(
                                                 Expression::Assignment(
                                                     Box::new(Expression::Var("x".into())),
-                                                    Box::new(Expression::Constant(3))
+                                                    Box::new(Expression::Constant(
+                                                        Const::ConstInt(3)
+                                                    ))
                                                 )
                                             )),
                                             BlockItem::D(Declaration::VarDecl(VarDecl {
                                                 name: "x".into(),
-                                                init: Some(Expression::Constant(4)),
+                                                init: Some(Expression::Constant(Const::ConstInt(
+                                                    4
+                                                ))),
+                                                var_type: Type::Int,
                                                 storage_class: None,
                                             }))
                                         ]
@@ -1616,6 +1769,10 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Var("x".into())))
                     ]
                 }),
+                fun_type: Type::FunType {
+                    params: vec![],
+                    ret: Box::new(Type::Int),
+                },
                 storage_class: None,
             }
         );
@@ -1642,10 +1799,10 @@ mod tests {
                 params: vec![],
                 body: Some(Block {
                     items: vec![BlockItem::S(Statement::While {
-                        condition: Expression::Constant(1),
+                        condition: Expression::Constant(Const::ConstInt(1)),
                         body: Box::new(Statement::Compound(Block {
                             items: vec![BlockItem::S(Statement::If {
-                                condition: Expression::Constant(0),
+                                condition: Expression::Constant(Const::ConstInt(0)),
                                 then: Box::new(Statement::Continue(None)),
                                 else_: Some(Box::new(Statement::Break(None))),
                             })]
@@ -1653,6 +1810,10 @@ mod tests {
                         loop_label: None,
                     })]
                 }),
+                fun_type: Type::FunType {
+                    params: vec![],
+                    ret: Box::new(Type::Int),
+                },
                 storage_class: None,
             }
         );
@@ -1681,15 +1842,19 @@ mod tests {
                     items: vec![BlockItem::S(Statement::DoWhile {
                         body: Box::new(Statement::Compound(Block {
                             items: vec![BlockItem::S(Statement::If {
-                                condition: Expression::Constant(0),
+                                condition: Expression::Constant(Const::ConstInt(0)),
                                 then: Box::new(Statement::Continue(None)),
                                 else_: Some(Box::new(Statement::Break(None))),
                             })]
                         })),
-                        condition: Expression::Constant(1),
+                        condition: Expression::Constant(Const::ConstInt(1)),
                         loop_label: None,
                     })]
                 }),
+                fun_type: Type::FunType {
+                    params: vec![],
+                    ret: Box::new(Type::Int),
+                },
                 storage_class: None,
             }
         );
@@ -1716,20 +1881,21 @@ mod tests {
                     items: vec![BlockItem::S(Statement::For {
                         init: ForInit::InitDecl(VarDecl {
                             name: "i".into(),
-                            init: Some(Expression::Constant(0)),
+                            init: Some(Expression::Constant(Const::ConstInt(0))),
+                            var_type: Type::Int,
                             storage_class: None,
                         }),
                         condition: Some(Expression::Binary(
                             BinaryOperator::LessThan,
                             Box::new(Expression::Var("i".into())),
-                            Box::new(Expression::Constant(10))
+                            Box::new(Expression::Constant(Const::ConstInt(10)))
                         )),
                         post: Some(Expression::Assignment(
                             Box::new(Expression::Var("i".into())),
                             Box::new(Expression::Binary(
                                 BinaryOperator::Add,
                                 Box::new(Expression::Var("i".into())),
-                                Box::new(Expression::Constant(1))
+                                Box::new(Expression::Constant(Const::ConstInt(1)))
                             ))
                         )),
                         body: Box::new(Statement::Compound(Block {
@@ -1737,7 +1903,7 @@ mod tests {
                                 condition: Expression::Binary(
                                     BinaryOperator::GreaterThan,
                                     Box::new(Expression::Var("i".into())),
-                                    Box::new(Expression::Constant(5))
+                                    Box::new(Expression::Constant(Const::ConstInt(5)))
                                 ),
                                 then: Box::new(Statement::Break(None)),
                                 else_: None,
@@ -1746,6 +1912,10 @@ mod tests {
                         loop_label: None,
                     })]
                 }),
+                fun_type: Type::FunType {
+                    params: vec![],
+                    ret: Box::new(Type::Int),
+                },
                 storage_class: None,
             }
         );
@@ -1763,8 +1933,8 @@ mod tests {
             ast,
             Statement::For {
                 init: ForInit::InitExp(None),
-                condition: Some(Expression::Constant(0)),
-                post: Some(Expression::Constant(1)),
+                condition: Some(Expression::Constant(Const::ConstInt(0))),
+                post: Some(Expression::Constant(Const::ConstInt(1))),
                 body: Box::new(Statement::Null),
                 loop_label: None,
             }
@@ -1782,9 +1952,9 @@ mod tests {
         assert_eq!(
             ast,
             Statement::For {
-                init: ForInit::InitExp(Some(Expression::Constant(2))),
-                condition: Some(Expression::Constant(0)),
-                post: Some(Expression::Constant(1)),
+                init: ForInit::InitExp(Some(Expression::Constant(Const::ConstInt(2)))),
+                condition: Some(Expression::Constant(Const::ConstInt(0))),
+                post: Some(Expression::Constant(Const::ConstInt(1))),
                 body: Box::new(Statement::Null),
                 loop_label: None,
             }
@@ -1802,9 +1972,9 @@ mod tests {
         assert_eq!(
             ast,
             Statement::For {
-                init: ForInit::InitExp(Some(Expression::Constant(1))),
+                init: ForInit::InitExp(Some(Expression::Constant(Const::ConstInt(1)))),
                 condition: None,
-                post: Some(Expression::Constant(1)),
+                post: Some(Expression::Constant(Const::ConstInt(1))),
                 body: Box::new(Statement::Null),
                 loop_label: None,
             }
@@ -1822,8 +1992,8 @@ mod tests {
         assert_eq!(
             ast,
             Statement::For {
-                init: ForInit::InitExp(Some(Expression::Constant(1))),
-                condition: Some(Expression::Constant(2)),
+                init: ForInit::InitExp(Some(Expression::Constant(Const::ConstInt(1)))),
+                condition: Some(Expression::Constant(Const::ConstInt(2))),
                 post: None,
                 body: Box::new(Statement::Null),
                 loop_label: None,
@@ -1853,7 +2023,7 @@ mod tests {
 
     #[test]
     fn test_parameter_list() {
-        fn parse(input: &str) -> Vec<Identifier> {
+        fn parse(input: &str) -> Vec<(Type, Identifier)> {
             let tokens = lex(input).unwrap();
             let tokens = Tokens::new(&tokens);
             let result = parameter_list.parse(tokens);
@@ -1861,10 +2031,18 @@ mod tests {
         }
 
         assert!(parse("(void)").is_empty());
-        assert_eq!(parse("(int x)"), vec!["x".to_string()]);
+        assert_eq!(parse("(int x)"), vec![(Type::Int, "x".to_string())]);
         assert_eq!(
             parse("(int x, int y)"),
-            vec!["x".to_string(), "y".to_string()]
+            vec![(Type::Int, "x".to_string()), (Type::Int, "y".to_string())]
+        );
+        assert_eq!(
+            parse("(int long x, long int y, long z)"),
+            vec![
+                (Type::Long, "x".to_string()),
+                (Type::Long, "y".to_string()),
+                (Type::Long, "z".to_string())
+            ]
         );
     }
 
@@ -1882,11 +2060,11 @@ mod tests {
         assert_eq!(
             parse("(1, y + 2)"),
             vec![
-                Expression::Constant(1),
+                Expression::Constant(Const::ConstInt(1)),
                 Expression::Binary(
                     BinaryOperator::Add,
                     Box::new(Expression::Var("y".to_string())),
-                    Box::new(Expression::Constant(2))
+                    Box::new(Expression::Constant(Const::ConstInt(2)))
                 )
             ]
         );
@@ -1906,6 +2084,10 @@ mod tests {
                     name: "main".into(),
                     params: vec![],
                     body: None,
+                    fun_type: Type::FunType {
+                        params: vec![],
+                        ret: Box::new(Type::Int),
+                    },
                     storage_class: None,
                 })]
             }
@@ -1929,8 +2111,14 @@ mod tests {
                         name: "main".into(),
                         params: vec![],
                         body: Some(Block {
-                            items: vec![BlockItem::S(Statement::Return(Expression::Constant(1)))]
+                            items: vec![BlockItem::S(Statement::Return(Expression::Constant(
+                                Const::ConstInt(1)
+                            )))]
                         }),
+                        fun_type: Type::FunType {
+                            params: vec![],
+                            ret: Box::new(Type::Int),
+                        },
                         storage_class: None,
                     }),
                     Declaration::FunDecl(FunDecl {
@@ -1941,6 +2129,10 @@ mod tests {
                                 "x".into()
                             )))]
                         }),
+                        fun_type: Type::FunType {
+                            params: vec![Type::Int],
+                            ret: Box::new(Type::Int),
+                        },
                         storage_class: None,
                     }),
                     Declaration::FunDecl(FunDecl {
@@ -1953,6 +2145,10 @@ mod tests {
                                 Box::new(Expression::Var("y".into()))
                             )))]
                         }),
+                        fun_type: Type::FunType {
+                            params: vec![Type::Int, Type::Int],
+                            ret: Box::new(Type::Int),
+                        },
                         storage_class: None,
                     })
                 ]
@@ -1982,22 +2178,87 @@ mod tests {
                             BlockItem::D(Declaration::VarDecl(VarDecl {
                                 name: "x".into(),
                                 init: None,
+                                var_type: Type::Int,
                                 storage_class: None,
                             })),
                             BlockItem::D(Declaration::FunDecl(FunDecl {
                                 name: "helper".into(),
                                 params: vec!["y".into()],
                                 body: None,
+                                fun_type: Type::FunType {
+                                    params: vec![Type::Int],
+                                    ret: Box::new(Type::Int),
+                                },
                                 storage_class: None,
                             })),
                             BlockItem::S(Statement::Return(Expression::FunctionCall(
                                 "helper".into(),
-                                vec![Expression::Constant(42)],
+                                vec![Expression::Constant(Const::ConstInt(42))],
                             ))),
                         ]
                     }),
+                    fun_type: Type::FunType {
+                        params: vec![],
+                        ret: Box::new(Type::Int),
+                    },
                     storage_class: None,
                 })]
+            }
+        )
+    }
+
+    #[test]
+    fn test_parse_long_ints() {
+        // k's literal does fit in a 32-bit int, the const is declared as int
+        // l's literal does not fit in a 32-bit int, the const is declared as long
+        let input = r#"
+            long k;
+            long l;
+            int main(void) {
+                k = 2147483647;
+                l = 2147483653;
+            }
+        "#;
+        let ast = parse_program(input);
+
+        assert_eq!(
+            ast,
+            Program {
+                declarations: vec![
+                    Declaration::VarDecl(VarDecl {
+                        name: "k".into(),
+                        init: None,
+                        var_type: Type::Long,
+                        storage_class: None,
+                    }),
+                    Declaration::VarDecl(VarDecl {
+                        name: "l".into(),
+                        init: None,
+                        var_type: Type::Long,
+                        storage_class: None,
+                    }),
+                    Declaration::FunDecl(FunDecl {
+                        name: "main".into(),
+                        params: vec![],
+                        body: Some(Block {
+                            items: vec![
+                                BlockItem::S(Statement::Expression(Expression::Assignment(
+                                    Box::new(Expression::Var("k".into())),
+                                    Box::new(Expression::Constant(Const::ConstInt(2147483647)))
+                                ))),
+                                BlockItem::S(Statement::Expression(Expression::Assignment(
+                                    Box::new(Expression::Var("l".into())),
+                                    Box::new(Expression::Constant(Const::ConstLong(2147483653)))
+                                ))),
+                            ]
+                        }),
+                        fun_type: Type::FunType {
+                            params: vec![],
+                            ret: Box::new(Type::Int),
+                        },
+                        storage_class: None,
+                    })
+                ]
             }
         )
     }

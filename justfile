@@ -125,4 +125,5 @@ ch10: build
 
 
 ch11: build
-    {{test_compiler}} {{cc}} --chapter 11 --stage lex
+    #{{test_compiler}} {{cc}} --chapter 11 --stage lex
+    {{test_compiler}} {{cc}} --chapter 11 --stage parse

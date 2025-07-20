@@ -48,7 +48,7 @@ pub(crate) enum TopLevel {
     StaticVariable {
         name: Identifier,
         global: bool,
-        init: usize,
+        init: i64,
     },
 }
 
@@ -99,7 +99,7 @@ pub(crate) enum Instruction {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Val {
-    Constant(usize),
+    Constant(i64),
     Var(Identifier),
 }
 
@@ -239,10 +239,10 @@ fn emit_expression(
     id_gen: &mut IdGenerator,
 ) -> Val {
     match exp {
-        ast_c::Expression::Constant(c) => Val::Constant(*c),
-
+        ast_c::Expression::Constant(ast_c::Const::ConstInt(c)) => Val::Constant(i64::from(*c)),
+        ast_c::Expression::Constant(ast_c::Const::ConstLong(_)) => todo!(),
         ast_c::Expression::Var(identifier) => Val::Var(identifier.into()),
-
+        ast_c::Expression::Cast(_, _) => todo!(),
         ast_c::Expression::Unary(op, inner) => {
             let src = emit_expression(inner, instructions, id_gen);
             let dst = Val::Var(next_var(id_gen));
@@ -454,6 +454,7 @@ fn emit_variable_declaration(
     ast_c::VarDecl {
         name,
         init,
+        var_type: _,
         storage_class,
     }: &ast_c::VarDecl,
     instructions: &mut Vec<Instruction>,
@@ -880,7 +881,7 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_constant_expression() {
-        let exp = ast_c::Expression::Constant(2);
+        let exp = ast_c::Expression::Constant(ast_c::Const::ConstInt(2));
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
 
@@ -895,7 +896,7 @@ mod tests {
     fn test_emit_tacky_unary_expression() {
         let exp = ast_c::Expression::Unary(
             ast_c::UnaryOperator::Complement,
-            Box::new(ast_c::Expression::Constant(2)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
         );
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
@@ -922,7 +923,7 @@ mod tests {
                 ast_c::UnaryOperator::Complement,
                 Box::new(ast_c::Expression::Unary(
                     ast_c::UnaryOperator::Negate,
-                    Box::new(ast_c::Expression::Constant(8)),
+                    Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(8))),
                 )),
             )),
         );
@@ -957,8 +958,9 @@ mod tests {
 
     #[test]
     fn test_emit_statement_return_constant() {
-        let (ins, instructions) =
-            do_emit_statement(&ast_c::Statement::Return(ast_c::Expression::Constant(2)));
+        let (ins, instructions) = do_emit_statement(&ast_c::Statement::Return(
+            ast_c::Expression::Constant(ast_c::Const::ConstInt(2)),
+        ));
 
         assert_eq!(ins, Some(Instruction::Return(Val::Constant(2))));
         assert!(instructions.is_empty());
@@ -969,7 +971,7 @@ mod tests {
         let (ins, instructions) =
             do_emit_statement(&ast_c::Statement::Return(ast_c::Expression::Unary(
                 ast_c::UnaryOperator::Negate,
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             )));
 
         assert_eq!(ins, Some(Instruction::Return(Val::Var("tmp.0".into()))));
@@ -988,8 +990,8 @@ mod tests {
         let (ins, instructions) =
             do_emit_statement(&ast_c::Statement::Expression(ast_c::Expression::Binary(
                 ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(1)),
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             )));
 
         // No return value for expression statement
@@ -1022,12 +1024,18 @@ mod tests {
                                 ast_c::UnaryOperator::Complement,
                                 Box::new(ast_c::Expression::Unary(
                                     ast_c::UnaryOperator::Negate,
-                                    Box::new(ast_c::Expression::Constant(8)),
+                                    Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(
+                                        8,
+                                    ))),
                                 )),
                             )),
                         ),
                     ))],
                 }),
+                fun_type: ast_c::Type::FunType {
+                    params: vec![],
+                    ret: ast_c::Type::Int.into(),
+                },
                 storage_class: None,
             })],
         };
@@ -1078,21 +1086,29 @@ mod tests {
                             ast_c::BinaryOperator::Subtract,
                             Box::new(ast_c::Expression::Binary(
                                 ast_c::BinaryOperator::Multiply,
-                                Box::new(ast_c::Expression::Constant(1)),
-                                Box::new(ast_c::Expression::Constant(2)),
+                                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
                             )),
                             Box::new(ast_c::Expression::Binary(
                                 ast_c::BinaryOperator::Multiply,
-                                Box::new(ast_c::Expression::Constant(3)),
+                                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
                                 Box::new(ast_c::Expression::Binary(
                                     ast_c::BinaryOperator::Add,
-                                    Box::new(ast_c::Expression::Constant(4)),
-                                    Box::new(ast_c::Expression::Constant(5)),
+                                    Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(
+                                        4,
+                                    ))),
+                                    Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(
+                                        5,
+                                    ))),
                                 )),
                             )),
                         ),
                     ))],
                 }),
+                fun_type: ast_c::Type::FunType {
+                    params: vec![],
+                    ret: ast_c::Type::Int.into(),
+                },
                 storage_class: None,
             })],
         };
@@ -1158,7 +1174,7 @@ mod tests {
     fn test_emit_tacky_unary_not() {
         let (val, instructions) = do_emit_tacky(&ast_c::Expression::Unary(
             ast_c::UnaryOperator::Not,
-            Box::new(ast_c::Expression::Constant(1)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
         ));
 
         assert_eq!(val, Val::Var("tmp.0".into()));
@@ -1190,10 +1206,10 @@ mod tests {
             ast_c::BinaryOperator::And,
             Box::new(ast_c::Expression::Binary(
                 ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(1)),
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             )),
-            Box::new(ast_c::Expression::Constant(3)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
         ));
 
         assert_eq!(val, Val::Var("tmp.2".into()));
@@ -1249,10 +1265,10 @@ mod tests {
             ast_c::BinaryOperator::Or,
             Box::new(ast_c::Expression::Binary(
                 ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(1)),
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             )),
-            Box::new(ast_c::Expression::Constant(3)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
         ));
 
         assert_eq!(val, Val::Var("tmp.2".into()));
@@ -1297,11 +1313,11 @@ mod tests {
         //   e1 || (e2 && e3)
         let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
             ast_c::BinaryOperator::Or,
-            Box::new(ast_c::Expression::Constant(1)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
             Box::new(ast_c::Expression::Binary(
                 ast_c::BinaryOperator::And,
-                Box::new(ast_c::Expression::Constant(2)),
-                Box::new(ast_c::Expression::Constant(3)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
             )),
         ));
 
@@ -1363,10 +1379,10 @@ mod tests {
             ast_c::BinaryOperator::Equal,
             Box::new(ast_c::Expression::Binary(
                 ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(1)),
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             )),
-            Box::new(ast_c::Expression::Constant(3)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1395,10 +1411,10 @@ mod tests {
             ast_c::BinaryOperator::NotEqual,
             Box::new(ast_c::Expression::Binary(
                 ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(1)),
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             )),
-            Box::new(ast_c::Expression::Constant(3)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1427,10 +1443,10 @@ mod tests {
             ast_c::BinaryOperator::LessThan,
             Box::new(ast_c::Expression::Binary(
                 ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(1)),
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             )),
-            Box::new(ast_c::Expression::Constant(3)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1459,10 +1475,10 @@ mod tests {
             ast_c::BinaryOperator::GreaterThan,
             Box::new(ast_c::Expression::Binary(
                 ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(1)),
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             )),
-            Box::new(ast_c::Expression::Constant(3)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1491,10 +1507,10 @@ mod tests {
             ast_c::BinaryOperator::LessOrEqual,
             Box::new(ast_c::Expression::Binary(
                 ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(1)),
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             )),
-            Box::new(ast_c::Expression::Constant(3)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1523,10 +1539,10 @@ mod tests {
             ast_c::BinaryOperator::GreaterOrEqual,
             Box::new(ast_c::Expression::Binary(
                 ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(1)),
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             )),
-            Box::new(ast_c::Expression::Constant(3)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1569,6 +1585,7 @@ mod tests {
                         ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
                             name: "b.98".into(),
                             init: None,
+                            var_type: ast_c::Type::Int,
                             storage_class: None,
                         })),
                         // int a = 10 + 1;
@@ -1576,9 +1593,10 @@ mod tests {
                             name: "a.99".into(),
                             init: Some(ast_c::Expression::Binary(
                                 ast_c::BinaryOperator::Add,
-                                Box::new(ast_c::Expression::Constant(10)),
-                                Box::new(ast_c::Expression::Constant(1)),
+                                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(10))),
+                                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
                             )),
+                            var_type: ast_c::Type::Int,
                             storage_class: None,
                         })),
                         // b = a * 2;
@@ -1588,14 +1606,17 @@ mod tests {
                                 Box::new(ast_c::Expression::Binary(
                                     ast_c::BinaryOperator::Multiply,
                                     Box::new(ast_c::Expression::Var("a.99".into())),
-                                    Box::new(ast_c::Expression::Constant(2)),
+                                    Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(
+                                        2,
+                                    ))),
                                 )),
                             ),
                         )),
                         // int c = 42;
                         ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
                             name: "c.100".into(),
-                            init: Some(ast_c::Expression::Constant(42)),
+                            init: Some(ast_c::Expression::Constant(ast_c::Const::ConstInt(42))),
+                            var_type: ast_c::Type::Int,
                             storage_class: None,
                         })),
                         // return b;
@@ -1604,6 +1625,10 @@ mod tests {
                         ))),
                     ],
                 }),
+                fun_type: ast_c::Type::FunType {
+                    params: vec![],
+                    ret: ast_c::Type::Int.into(),
+                },
                 storage_class: None,
             })],
         };
@@ -1673,10 +1698,12 @@ mod tests {
         let (ins, instructions) = do_emit_statement(&ast_c::Statement::If {
             condition: ast_c::Expression::Binary(
                 ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(1)),
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             ),
-            then: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(1))),
+            then: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
+                ast_c::Const::ConstInt(1),
+            ))),
             else_: None,
         });
 
@@ -1720,12 +1747,14 @@ mod tests {
         let (ins, instructions) = do_emit_statement(&ast_c::Statement::If {
             condition: ast_c::Expression::Binary(
                 ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(1)),
-                Box::new(ast_c::Expression::Constant(2)),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             ),
-            then: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(1))),
+            then: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
+                ast_c::Const::ConstInt(1),
+            ))),
             else_: Some(Box::new(ast_c::Statement::Return(
-                ast_c::Expression::Constant(2),
+                ast_c::Expression::Constant(ast_c::Const::ConstInt(2)),
             ))),
         });
 
@@ -1774,9 +1803,9 @@ mod tests {
         // Page 127
         // 1 ? 2 : 3
         let (val, instructions) = do_emit_tacky(&ast_c::Expression::Conditional(
-            Box::new(ast_c::Expression::Constant(1)),
-            Box::new(ast_c::Expression::Constant(2)),
-            Box::new(ast_c::Expression::Constant(3)),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
+            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
         ));
 
         // Expected TACKY (Listing 6-14):
@@ -1857,23 +1886,27 @@ mod tests {
                         ast_c::BlockItem::S(ast_c::Statement::Labeled {
                             label: "label0".into(),
                             statement: Box::new(ast_c::Statement::Return(
-                                ast_c::Expression::Constant(0),
+                                ast_c::Expression::Constant(ast_c::Const::ConstInt(0)),
                             )),
                         }),
                         ast_c::BlockItem::S(ast_c::Statement::Labeled {
                             label: "label1".into(),
                             statement: Box::new(ast_c::Statement::Return(
-                                ast_c::Expression::Constant(1),
+                                ast_c::Expression::Constant(ast_c::Const::ConstInt(1)),
                             )),
                         }),
                         ast_c::BlockItem::S(ast_c::Statement::Labeled {
                             label: "label2".into(),
                             statement: Box::new(ast_c::Statement::Return(
-                                ast_c::Expression::Constant(2),
+                                ast_c::Expression::Constant(ast_c::Const::ConstInt(2)),
                             )),
                         }),
                     ],
                 }),
+                fun_type: ast_c::Type::FunType {
+                    params: vec![],
+                    ret: ast_c::Type::Int.into(),
+                },
                 storage_class: None,
             })],
         };
@@ -1937,12 +1970,20 @@ mod tests {
                             ),
                         ))],
                     }),
+                    fun_type: ast_c::Type::FunType {
+                        params: vec![ast_c::Type::Int, ast_c::Type::Int],
+                        ret: ast_c::Type::Int.into(),
+                    },
                     storage_class: None,
                 }),
                 ast_c::Declaration::FunDecl(ast_c::FunDecl {
                     name: "bar".into(),
                     params: vec!["a".into()],
                     body: None,
+                    fun_type: ast_c::Type::FunType {
+                        params: vec![ast_c::Type::Int],
+                        ret: ast_c::Type::Int.into(),
+                    },
                     storage_class: None,
                 }),
                 ast_c::Declaration::FunDecl(ast_c::FunDecl {
@@ -1953,12 +1994,16 @@ mod tests {
                             ast_c::Expression::FunctionCall(
                                 "foo".into(),
                                 vec![
-                                    ast_c::Expression::Constant(42),
-                                    ast_c::Expression::Constant(77),
+                                    ast_c::Expression::Constant(ast_c::Const::ConstInt(42)),
+                                    ast_c::Expression::Constant(ast_c::Const::ConstInt(77)),
                                 ],
                             ),
                         ))],
                     }),
+                    fun_type: ast_c::Type::FunType {
+                        params: vec![],
+                        ret: ast_c::Type::Int.into(),
+                    },
                     storage_class: None,
                 }),
             ],
@@ -2021,16 +2066,19 @@ mod tests {
                 ast_c::Declaration::VarDecl(ast_c::VarDecl {
                     name: "a".into(),
                     init: None,
+                    var_type: ast_c::Type::Int,
                     storage_class: Some(ast_c::StorageClass::Extern),
                 }),
                 ast_c::Declaration::VarDecl(ast_c::VarDecl {
                     name: "b".into(),
-                    init: Some(ast_c::Expression::Constant(42)),
+                    init: Some(ast_c::Expression::Constant(ast_c::Const::ConstInt(42))),
+                    var_type: ast_c::Type::Int,
                     storage_class: Some(ast_c::StorageClass::Static),
                 }),
                 ast_c::Declaration::VarDecl(ast_c::VarDecl {
                     name: "c".into(),
-                    init: Some(ast_c::Expression::Constant(0)),
+                    init: Some(ast_c::Expression::Constant(ast_c::Const::ConstInt(0))),
+                    var_type: ast_c::Type::Int,
                     storage_class: Some(ast_c::StorageClass::Extern),
                 }),
                 ast_c::Declaration::FunDecl(ast_c::FunDecl {
@@ -2040,19 +2088,25 @@ mod tests {
                         items: vec![
                             ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
                                 name: "d".into(),
-                                init: Some(ast_c::Expression::Constant(77)),
+                                init: Some(ast_c::Expression::Constant(ast_c::Const::ConstInt(77))),
+                                var_type: ast_c::Type::Int,
                                 storage_class: Some(ast_c::StorageClass::Static),
                             })),
                             ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
                                 name: "e".into(),
                                 init: None,
+                                var_type: ast_c::Type::Int,
                                 storage_class: Some(ast_c::StorageClass::Extern),
                             })),
                             ast_c::BlockItem::S(ast_c::Statement::Return(
-                                ast_c::Expression::Constant(0),
+                                ast_c::Expression::Constant(ast_c::Const::ConstInt(0)),
                             )),
                         ],
                     }),
+                    fun_type: ast_c::Type::FunType {
+                        params: vec![],
+                        ret: ast_c::Type::Int.into(),
+                    },
                     storage_class: None,
                 }),
             ],
