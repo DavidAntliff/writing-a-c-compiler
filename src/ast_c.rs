@@ -76,7 +76,7 @@ pub(crate) struct FunDecl {
 pub(crate) enum Type {
     Int,
     Long,
-    FunType { params: Vec<Type>, ret: Box<Type> },
+    Fun { params: Vec<Type>, ret: Box<Type> },
 }
 
 #[derive(Debug, Display, PartialEq, Clone)]

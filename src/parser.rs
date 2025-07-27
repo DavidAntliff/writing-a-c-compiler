@@ -71,9 +71,7 @@ pub struct ParserError {
 
 impl ParserError {
     // Avoiding `From` so winnow types don't become part of our public API
-    fn from_parse(
-        error: winnow::error::ParseError<TokenSlice<'_, Token>, winnow::error::ContextError>,
-    ) -> Self {
+    fn from_parse(error: winnow::error::ParseError<TokenSlice<'_, Token>, ContextError>) -> Self {
         let context = error.inner().context();
 
         // Use the first context that is a label
@@ -214,7 +212,7 @@ fn function_declaration(i: &mut Tokens<'_>) -> ModalResult<FunDecl> {
             name,
             params: param_identifiers,
             body,
-            fun_type: Type::FunType {
+            fun_type: Type::Fun {
                 params: param_types,
                 ret: Box::new(ret_type.clone()),
             },
@@ -298,7 +296,7 @@ fn to_type(specifiers: &[Keyword]) -> Result<Type, ParserError> {
         _ => Err(ParserError {
             message: "Invalid type specifiers".to_string(),
             expected: "valid type specifier combination".to_string(),
-            found: format!("{:?}", specifiers),
+            found: format!("{specifiers:?}"),
             offset: 0, // Hmmm....
         }),
     }
@@ -1033,7 +1031,7 @@ fn constant(i: &mut Tokens<'_>) -> ModalResult<Const> {
             let c = match &t.kind {
                 TokenKind::Constant(c) => {
                     let v = match c {
-                        Constant::Int(c) => *c as i64,
+                        Constant::Int(c) => *c,
                         Constant::Long(c) => *c,
                     };
 
@@ -1399,7 +1397,7 @@ mod tests {
                             )))
                         ]
                     }),
-                    fun_type: Type::FunType {
+                    fun_type: Type::Fun {
                         params: vec![],
                         ret: Box::new(Type::Int),
                     },
@@ -1599,7 +1597,7 @@ mod tests {
                         })
                     ]
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Box::new(Type::Int),
                 },
@@ -1642,7 +1640,7 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
                     ]
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Box::new(Type::Int),
                 },
@@ -1686,7 +1684,7 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
                     ]
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Box::new(Type::Int),
                 },
@@ -1769,7 +1767,7 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Var("x".into())))
                     ]
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Box::new(Type::Int),
                 },
@@ -1810,7 +1808,7 @@ mod tests {
                         loop_label: None,
                     })]
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Box::new(Type::Int),
                 },
@@ -1851,7 +1849,7 @@ mod tests {
                         loop_label: None,
                     })]
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Box::new(Type::Int),
                 },
@@ -1912,7 +1910,7 @@ mod tests {
                         loop_label: None,
                     })]
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Box::new(Type::Int),
                 },
@@ -2084,7 +2082,7 @@ mod tests {
                     name: "main".into(),
                     params: vec![],
                     body: None,
-                    fun_type: Type::FunType {
+                    fun_type: Type::Fun {
                         params: vec![],
                         ret: Box::new(Type::Int),
                     },
@@ -2115,7 +2113,7 @@ mod tests {
                                 Const::ConstInt(1)
                             )))]
                         }),
-                        fun_type: Type::FunType {
+                        fun_type: Type::Fun {
                             params: vec![],
                             ret: Box::new(Type::Int),
                         },
@@ -2129,7 +2127,7 @@ mod tests {
                                 "x".into()
                             )))]
                         }),
-                        fun_type: Type::FunType {
+                        fun_type: Type::Fun {
                             params: vec![Type::Int],
                             ret: Box::new(Type::Int),
                         },
@@ -2145,7 +2143,7 @@ mod tests {
                                 Box::new(Expression::Var("y".into()))
                             )))]
                         }),
-                        fun_type: Type::FunType {
+                        fun_type: Type::Fun {
                             params: vec![Type::Int, Type::Int],
                             ret: Box::new(Type::Int),
                         },
@@ -2185,7 +2183,7 @@ mod tests {
                                 name: "helper".into(),
                                 params: vec!["y".into()],
                                 body: None,
-                                fun_type: Type::FunType {
+                                fun_type: Type::Fun {
                                     params: vec![Type::Int],
                                     ret: Box::new(Type::Int),
                                 },
@@ -2197,7 +2195,7 @@ mod tests {
                             ))),
                         ]
                     }),
-                    fun_type: Type::FunType {
+                    fun_type: Type::Fun {
                         params: vec![],
                         ret: Box::new(Type::Int),
                     },
@@ -2252,7 +2250,7 @@ mod tests {
                                 ))),
                             ]
                         }),
-                        fun_type: Type::FunType {
+                        fun_type: Type::Fun {
                             params: vec![],
                             ret: Box::new(Type::Int),
                         },

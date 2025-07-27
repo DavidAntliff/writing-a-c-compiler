@@ -326,7 +326,7 @@ mod tests {
                             Const::ConstInt(2)
                         )))]
                     }),
-                    fun_type: Type::FunType {
+                    fun_type: Type::Fun {
                         params: vec![],
                         ret: Box::new(Type::Int),
                     },

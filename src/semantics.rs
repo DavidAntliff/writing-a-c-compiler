@@ -444,7 +444,10 @@ fn resolve_exp(exp: &Expression, identifier_map: &mut IdentifierMap) -> Result<E
             .map(|var| Expression::Var(var.unique_name.clone()))
             .ok_or_else(|| Error::UndeclaredVariable(v.clone()))
             .map(Ok)?,
-        Expression::Cast(_, _) => todo!(),
+        Expression::Cast(t, exp) => Ok(Expression::Cast(
+            t.clone(),
+            resolve_exp(exp, identifier_map)?.into(),
+        )),
         Expression::Unary(op, exp) => Ok(Expression::Unary(
             op.clone(),
             resolve_exp(exp, identifier_map)?.into(),
@@ -804,7 +807,7 @@ fn typecheck_file_scope_variable_declaration(
     // Determine if tentatively globally visible, or static
     let mut global = decl.storage_class != Some(StorageClass::Static);
 
-    // Consider prior declarations, disgreesments result in errors
+    // Consider prior declarations, disagreements result in errors
     if let Some(old_decl) = symbol_table.get(&decl.name) {
         if old_decl.type_ != Type::Int {
             return Err(Error::FunctionRedeclaredAsVariable(decl.name.clone()));
@@ -1310,7 +1313,7 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Var("x".into()))),
                     ],
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Type::Int.into(),
                 },
@@ -1354,7 +1357,7 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
                     ],
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Type::Int.into(),
                 },
@@ -1386,7 +1389,7 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
                     ],
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Type::Int.into(),
                 },
@@ -1417,7 +1420,7 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
                     ],
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Type::Int.into(),
                 },
@@ -1444,7 +1447,7 @@ mod tests {
                             }),
                         ],
                     }),
-                    fun_type: Type::FunType {
+                    fun_type: Type::Fun {
                         params: vec![],
                         ret: Type::Int.into(),
                     },
@@ -1462,7 +1465,7 @@ mod tests {
                             }),
                         ],
                     }),
-                    fun_type: Type::FunType {
+                    fun_type: Type::Fun {
                         params: vec![],
                         ret: Type::Int.into(),
                     },
@@ -1572,7 +1575,7 @@ mod tests {
                         loop_label: None,
                     })],
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Type::Int.into(),
                 },
@@ -1656,14 +1659,14 @@ mod tests {
                         name: "x".into(),
                         params: vec![],
                         body: None,
-                        fun_type: Type::FunType {
+                        fun_type: Type::Fun {
                             params: vec![],
                             ret: Type::Int.into(),
                         },
                         storage_class: Some(StorageClass::Static), // not allowed
                     }))],
                 }),
-                fun_type: Type::FunType {
+                fun_type: Type::Fun {
                     params: vec![],
                     ret: Type::Int.into(),
                 },

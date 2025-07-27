@@ -1032,7 +1032,7 @@ mod tests {
                         ),
                     ))],
                 }),
-                fun_type: ast_c::Type::FunType {
+                fun_type: ast_c::Type::Fun {
                     params: vec![],
                     ret: ast_c::Type::Int.into(),
                 },
@@ -1105,7 +1105,7 @@ mod tests {
                         ),
                     ))],
                 }),
-                fun_type: ast_c::Type::FunType {
+                fun_type: ast_c::Type::Fun {
                     params: vec![],
                     ret: ast_c::Type::Int.into(),
                 },
@@ -1625,7 +1625,7 @@ mod tests {
                         ))),
                     ],
                 }),
-                fun_type: ast_c::Type::FunType {
+                fun_type: ast_c::Type::Fun {
                     params: vec![],
                     ret: ast_c::Type::Int.into(),
                 },
@@ -1903,7 +1903,7 @@ mod tests {
                         }),
                     ],
                 }),
-                fun_type: ast_c::Type::FunType {
+                fun_type: ast_c::Type::Fun {
                     params: vec![],
                     ret: ast_c::Type::Int.into(),
                 },
@@ -1970,7 +1970,7 @@ mod tests {
                             ),
                         ))],
                     }),
-                    fun_type: ast_c::Type::FunType {
+                    fun_type: ast_c::Type::Fun {
                         params: vec![ast_c::Type::Int, ast_c::Type::Int],
                         ret: ast_c::Type::Int.into(),
                     },
@@ -1980,7 +1980,7 @@ mod tests {
                     name: "bar".into(),
                     params: vec!["a".into()],
                     body: None,
-                    fun_type: ast_c::Type::FunType {
+                    fun_type: ast_c::Type::Fun {
                         params: vec![ast_c::Type::Int],
                         ret: ast_c::Type::Int.into(),
                     },
@@ -2000,7 +2000,7 @@ mod tests {
                             ),
                         ))],
                     }),
-                    fun_type: ast_c::Type::FunType {
+                    fun_type: ast_c::Type::Fun {
                         params: vec![],
                         ret: ast_c::Type::Int.into(),
                     },
@@ -2103,7 +2103,7 @@ mod tests {
                             )),
                         ],
                     }),
-                    fun_type: ast_c::Type::FunType {
+                    fun_type: ast_c::Type::Fun {
                         params: vec![],
                         ret: ast_c::Type::Int.into(),
                     },
