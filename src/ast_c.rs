@@ -44,34 +44,6 @@ use derive_more::Display;
 
 pub(crate) type Label = String;
 
-#[derive(Debug, PartialEq)]
-pub(crate) struct Program {
-    pub(crate) declarations: Vec<Declaration>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Declaration {
-    FunDecl(FunDecl),
-    VarDecl(VarDecl),
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct VarDecl {
-    pub(crate) name: Identifier,
-    pub(crate) init: Option<Expression>,
-    pub(crate) var_type: Type,
-    pub(crate) storage_class: Option<StorageClass>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct FunDecl {
-    pub(crate) name: Identifier,
-    pub(crate) params: Vec<Identifier>,
-    pub(crate) body: Option<Block>,
-    pub(crate) fun_type: Type,
-    pub(crate) storage_class: Option<StorageClass>,
-}
-
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Type {
     Int,
@@ -85,58 +57,115 @@ pub enum StorageClass {
     Extern,
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum BlockItem {
-    S(Statement),
-    D(Declaration),
+mod ast_base {
+    use super::{Label, StorageClass, Type};
+    use crate::lexer::Identifier;
+
+    /// A program: a sequence of declarations
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Program<E> {
+        pub declarations: Vec<Declaration<E>>,
+    }
+
+    /// Top-level declaration: function or variable
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum Declaration<E> {
+        FunDecl(FunDecl<E>),
+        VarDecl(VarDecl<E>),
+    }
+
+    /// Variable declaration with optional initializer `E`
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct VarDecl<E> {
+        pub name: Identifier,
+        pub init: Option<E>,
+        pub var_type: Type,
+        pub storage_class: Option<StorageClass>,
+    }
+
+    /// Function declaration, with optional body of `Block<E>`
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct FunDecl<E> {
+        pub name: Identifier,
+        pub params: Vec<Identifier>,
+        pub body: Option<Block<E>>,
+        pub fun_type: Type,
+        pub storage_class: Option<StorageClass>,
+    }
+
+    /// `for`-initializer: either a `VarDecl<E>` or `Option<E>`
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum ForInit<E> {
+        InitDecl(VarDecl<E>),
+        InitExp(Option<E>),
+    }
+
+    /// Statement parameterized by expression type `E`
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum Statement<E> {
+        Return(E),
+        Expression(E),
+        If {
+            condition: E,
+            then_block: Box<Statement<E>>,
+            else_block: Option<Box<Statement<E>>>,
+        },
+        Labeled {
+            label: Label,
+            statement: Box<Statement<E>>,
+        },
+        Goto(Label),
+        Compound(Block<E>),
+        Break(Option<Label>),
+        Continue(Option<Label>),
+        While {
+            condition: E,
+            body: Box<Statement<E>>,
+            loop_label: Option<Label>,
+        },
+        DoWhile {
+            body: Box<Statement<E>>,
+            condition: E,
+            loop_label: Option<Label>,
+        },
+        For {
+            init: ForInit<E>,
+            condition: Option<E>,
+            post: Option<E>,
+            body: Box<Statement<E>>,
+            loop_label: Option<Label>,
+        },
+        Null,
+    }
+
+    /// A block item: statement or declaration
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum BlockItem<E> {
+        S(Statement<E>),
+        D(Declaration<E>),
+    }
+
+    /// A block: a sequence of block items
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Block<E> {
+        pub items: Vec<BlockItem<E>>,
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Block {
-    pub(crate) items: Vec<BlockItem>,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum ForInit {
-    InitDecl(VarDecl),
-    InitExp(Option<Expression>),
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Statement {
-    Return(Expression),
-    Expression(Expression),
-    If {
-        condition: Expression,
-        then: Box<Statement>,
-        else_: Option<Box<Statement>>,
-    },
-    Labeled {
-        label: Label,
-        statement: Box<Statement>,
-    },
-    Goto(Label),
-    Compound(Block),
-    Break(Option<Label>),
-    Continue(Option<Label>),
-    While {
-        condition: Expression,
-        body: Box<Statement>,
-        loop_label: Option<Label>,
-    },
-    DoWhile {
-        body: Box<Statement>,
-        condition: Expression,
-        loop_label: Option<Label>,
-    },
-    For {
-        init: ForInit,
-        condition: Option<Expression>,
-        post: Option<Expression>,
-        body: Box<Statement>,
-        loop_label: Option<Label>,
-    },
-    Null,
+pub(crate) enum TypedExpression {
+    Constant(Const),
+    Var(Identifier),
+    Cast(Type, Box<TypedExpression>),
+    Unary(UnaryOperator, Box<TypedExpression>),
+    Binary(BinaryOperator, Box<TypedExpression>, Box<TypedExpression>),
+    Assignment(Box<TypedExpression>, Box<TypedExpression>),
+    Conditional(
+        Box<TypedExpression>,
+        Box<TypedExpression>,
+        Box<TypedExpression>,
+    ),
+    FunctionCall(Identifier, Vec<TypedExpression>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -150,6 +179,26 @@ pub(crate) enum Expression {
     Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
     FunctionCall(Identifier, Vec<Expression>),
 }
+
+// === Untyped AST aliases ===
+pub type Program = ast_base::Program<Expression>;
+pub type Declaration = ast_base::Declaration<Expression>;
+pub type VarDecl = ast_base::VarDecl<Expression>;
+pub type FunDecl = ast_base::FunDecl<Expression>;
+pub type ForInit = ast_base::ForInit<Expression>;
+pub type Statement = ast_base::Statement<Expression>;
+pub type BlockItem = ast_base::BlockItem<Expression>;
+pub type Block = ast_base::Block<Expression>;
+
+// === Typed AST aliases ===
+pub type TypedProgram = ast_base::Program<TypedExpression>;
+pub type TypedDeclaration = ast_base::Declaration<TypedExpression>;
+pub type TypedVarDecl = ast_base::VarDecl<TypedExpression>;
+pub type TypedFunDecl = ast_base::FunDecl<TypedExpression>;
+pub type TypedForInit = ast_base::ForInit<TypedExpression>;
+pub type TypedStatement = ast_base::Statement<TypedExpression>;
+pub type TypedBlockItem = ast_base::BlockItem<TypedExpression>;
+pub type TypedBlock = ast_base::Block<TypedExpression>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum UnaryOperator {

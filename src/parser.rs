@@ -636,8 +636,8 @@ fn statement_if(i: &mut Tokens<'_>) -> ModalResult<Statement> {
 
     Ok(Statement::If {
         condition: exp,
-        then: Box::new(then_stmt),
-        else_: maybe_else_stmt.map(Box::new),
+        then_block: Box::new(then_stmt),
+        else_block: maybe_else_stmt.map(Box::new),
     })
 }
 
@@ -1427,15 +1427,17 @@ mod tests {
                     Box::new(Expression::Var("a".into())),
                     Box::new(Expression::Constant(Const::ConstInt(100)))
                 ),
-                then: Box::new(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
-                else_: Some(Box::new(Statement::If {
+                then_block: Box::new(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
+                else_block: Some(Box::new(Statement::If {
                     condition: Expression::Binary(
                         BinaryOperator::GreaterThan,
                         Box::new(Expression::Var("a".into())),
                         Box::new(Expression::Constant(Const::ConstInt(50)))
                     ),
-                    then: Box::new(Statement::Return(Expression::Constant(Const::ConstInt(1)))),
-                    else_: Some(Box::new(Statement::Return(Expression::Constant(
+                    then_block: Box::new(Statement::Return(Expression::Constant(Const::ConstInt(
+                        1
+                    )))),
+                    else_block: Some(Box::new(Statement::Return(Expression::Constant(
                         Const::ConstInt(2)
                     ))))
                 }))
@@ -1672,13 +1674,13 @@ mod tests {
                     items: vec![
                         BlockItem::S(Statement::If {
                             condition: Expression::Constant(Const::ConstInt(0)),
-                            then: Box::new(Statement::Labeled {
+                            then_block: Box::new(Statement::Labeled {
                                 label: "label".into(),
                                 statement: Box::new(Statement::Return(Expression::Constant(
                                     Const::ConstInt(5)
                                 )))
                             }),
-                            else_: None,
+                            else_block: None,
                         }),
                         BlockItem::S(Statement::Goto("label".into())),
                         BlockItem::S(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
@@ -1739,7 +1741,7 @@ mod tests {
                                         Box::new(Expression::Var("x".into())),
                                         Box::new(Expression::Constant(Const::ConstInt(1)))
                                     ),
-                                    then: Box::new(Statement::Compound(Block {
+                                    then_block: Box::new(Statement::Compound(Block {
                                         items: vec![
                                             BlockItem::S(Statement::Expression(
                                                 Expression::Assignment(
@@ -1759,7 +1761,7 @@ mod tests {
                                             }))
                                         ]
                                     })),
-                                    else_: None,
+                                    else_block: None,
                                 }),
                                 BlockItem::S(Statement::Return(Expression::Var("x".into())))
                             ]
@@ -1801,8 +1803,8 @@ mod tests {
                         body: Box::new(Statement::Compound(Block {
                             items: vec![BlockItem::S(Statement::If {
                                 condition: Expression::Constant(Const::ConstInt(0)),
-                                then: Box::new(Statement::Continue(None)),
-                                else_: Some(Box::new(Statement::Break(None))),
+                                then_block: Box::new(Statement::Continue(None)),
+                                else_block: Some(Box::new(Statement::Break(None))),
                             })]
                         })),
                         loop_label: None,
@@ -1841,8 +1843,8 @@ mod tests {
                         body: Box::new(Statement::Compound(Block {
                             items: vec![BlockItem::S(Statement::If {
                                 condition: Expression::Constant(Const::ConstInt(0)),
-                                then: Box::new(Statement::Continue(None)),
-                                else_: Some(Box::new(Statement::Break(None))),
+                                then_block: Box::new(Statement::Continue(None)),
+                                else_block: Some(Box::new(Statement::Break(None))),
                             })]
                         })),
                         condition: Expression::Constant(Const::ConstInt(1)),
@@ -1903,8 +1905,8 @@ mod tests {
                                     Box::new(Expression::Var("i".into())),
                                     Box::new(Expression::Constant(Const::ConstInt(5)))
                                 ),
-                                then: Box::new(Statement::Break(None)),
-                                else_: None,
+                                then_block: Box::new(Statement::Break(None)),
+                                else_block: None,
                             })]
                         })),
                         loop_label: None,

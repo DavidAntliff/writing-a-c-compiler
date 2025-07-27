@@ -493,8 +493,8 @@ fn emit_statement(
         }
         ast_c::Statement::If {
             condition,
-            then,
-            else_,
+            then_block: then,
+            else_block: else_,
         } => emit_statement_if(condition, then, else_, instructions, id_gen, symbol_table),
         ast_c::Statement::Labeled { label, statement } => {
             instructions.push(Instruction::Label(label.clone().into()));
@@ -1701,10 +1701,10 @@ mod tests {
                 Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
                 Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             ),
-            then: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
+            then_block: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
                 ast_c::Const::ConstInt(1),
             ))),
-            else_: None,
+            else_block: None,
         });
 
         // Expected TACKY:
@@ -1750,10 +1750,10 @@ mod tests {
                 Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
                 Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
             ),
-            then: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
+            then_block: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
                 ast_c::Const::ConstInt(1),
             ))),
-            else_: Some(Box::new(ast_c::Statement::Return(
+            else_block: Some(Box::new(ast_c::Statement::Return(
                 ast_c::Expression::Constant(ast_c::Const::ConstInt(2)),
             ))),
         });

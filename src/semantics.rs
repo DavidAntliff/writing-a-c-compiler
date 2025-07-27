@@ -342,8 +342,8 @@ fn resolve_statement(
         Statement::Expression(exp) => Ok(Statement::Expression(resolve_exp(exp, identifier_map)?)),
         Statement::If {
             condition,
-            then,
-            else_,
+            then_block: then,
+            else_block: else_,
         } => {
             let else_ = if let Some(else_stmt) = else_ {
                 Some(Box::new(resolve_statement(
@@ -356,8 +356,8 @@ fn resolve_statement(
             };
             Ok(Statement::If {
                 condition: resolve_exp(condition, identifier_map)?,
-                then: Box::new(resolve_statement(then, identifier_map, id_gen)?),
-                else_,
+                then_block: Box::new(resolve_statement(then, identifier_map, id_gen)?),
+                else_block: else_,
             })
         }
         Statement::Labeled { label, statement } => {
@@ -563,17 +563,17 @@ fn loop_label_statement(
     match statement {
         Statement::If {
             condition,
-            then,
-            else_,
+            then_block: then,
+            else_block: else_,
         } => Ok(Statement::If {
             condition: condition.clone(),
-            then: Box::new(loop_label_statement(
+            then_block: Box::new(loop_label_statement(
                 then,
                 current_label.clone(),
                 _identifier_map,
                 id_gen,
             )?),
-            else_: if let Some(else_stmt) = else_ {
+            else_block: if let Some(else_stmt) = else_ {
                 Some(Box::new(loop_label_statement(
                     else_stmt,
                     current_label.clone(),
@@ -988,8 +988,8 @@ fn typecheck_statement(statement: &Statement, symbol_table: &mut SymbolTable) ->
         }
         Statement::If {
             condition,
-            then,
-            else_,
+            then_block: then,
+            else_block: else_,
         } => {
             typecheck_exp(condition, symbol_table)?;
             typecheck_statement(then, symbol_table)?;
@@ -1203,7 +1203,7 @@ fn resolve_statement_goto(
             *label = new_label;
             resolve_statement_goto(statement, function_id, label_table)?;
         }
-        Statement::If { then, else_, .. } => {
+        Statement::If { then_block: then, else_block: else_, .. } => {
             resolve_statement_goto(then, function_id, label_table)?;
             if let Some(else_stmt) = else_ {
                 resolve_statement_goto(else_stmt, function_id, label_table)?;
@@ -1257,7 +1257,7 @@ fn check_statement_goto(statement: &Statement, label_table: &LabelTable) -> Resu
                 return Err(Error::UndeclaredLabel(label.clone()));
             }
         }
-        Statement::If { then, else_, .. } => {
+        Statement::If { then_block: then, else_block: else_, .. } => {
             check_statement_goto(then, label_table)?;
             if let Some(else_stmt) = else_ {
                 check_statement_goto(else_stmt, label_table)?;
@@ -1539,8 +1539,8 @@ mod tests {
                                                         Const::ConstInt(0),
                                                     )),
                                                 ),
-                                                then: Box::new(Statement::Continue(None)),
-                                                else_: None,
+                                                then_block: Box::new(Statement::Continue(None)),
+                                                else_block: None,
                                             }),
                                             BlockItem::S(Statement::Expression(
                                                 Expression::Assignment(
@@ -1567,8 +1567,8 @@ mod tests {
                                         Box::new(Expression::Var("a".into())),
                                         Box::new(Expression::Var("b".into())),
                                     ),
-                                    then: Box::new(Statement::Break(None)),
-                                    else_: None,
+                                    then_block: Box::new(Statement::Break(None)),
+                                    else_block: None,
                                 }),
                             ],
                         })),
@@ -1603,8 +1603,8 @@ mod tests {
                 &fun_decl.body.as_ref().unwrap().items[0],
                 BlockItem::S(Statement::While { body, .. }) if matches!(
                     &**body, Statement::Compound(block) if matches!(
-                        &block.items[1], BlockItem::S(Statement::If { then, .. }) if matches!(
-                            &**then, Statement::Break(loop_label) if
+                        &block.items[1], BlockItem::S(Statement::If { then_block, .. }) if matches!(
+                            &**then_block, Statement::Break(loop_label) if
                                 *loop_label == Some("while.0".into())
                         )
                     )
@@ -1636,8 +1636,8 @@ mod tests {
                         &**body, Statement::Compound(block) if matches!(
                             &block.items[0], BlockItem::S(Statement::For { body, .. }) if matches!(
                                 &**body, Statement::Compound(block) if matches!(
-                                    &block.items[0], BlockItem::S(Statement::If { then, .. } ) if matches!(
-                                        &**then, Statement::Continue(loop_label) if
+                                    &block.items[0], BlockItem::S(Statement::If { then_block, .. } ) if matches!(
+                                        &**then_block, Statement::Continue(loop_label) if
                                     *loop_label == Some("for.1".into())
                                 ))
                             )
