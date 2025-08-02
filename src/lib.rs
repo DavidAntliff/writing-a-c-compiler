@@ -7,6 +7,7 @@ mod lexer;
 mod parser;
 mod semantics;
 mod tacky;
+mod typecheck;
 
 use crate::lexer::Token;
 use crate::semantics::SymbolTable;

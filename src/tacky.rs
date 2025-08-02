@@ -877,7 +877,7 @@ fn emit_for(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::semantics::type_checking;
+    use crate::typecheck::type_checking;
 
     #[test]
     fn test_emit_tacky_constant_expression() {

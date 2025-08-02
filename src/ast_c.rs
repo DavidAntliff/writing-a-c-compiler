@@ -153,7 +153,10 @@ mod ast_base {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum TypedExpression {
+pub(crate) struct TypedExpression(Type, InnerTypedExpression);
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum InnerTypedExpression {
     Constant(Const),
     Var(Identifier),
     Cast(Type, Box<TypedExpression>),
@@ -178,6 +181,25 @@ pub(crate) enum Expression {
     Assignment(Box<Expression>, Box<Expression>),
     Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
     FunctionCall(Identifier, Vec<Expression>),
+}
+
+// TODO this should move elsewhere, probably.
+// Also, which kind of Type do we want to annotate with here?
+// Should it be the AST type, or the semantic analysis type?
+impl TypedExpression {
+    pub(crate) fn new(exp: Expression, ty: Type) -> TypedExpression {
+        let inner = match exp {
+            Expression::Constant(c) => InnerTypedExpression::Constant(c),
+            Expression::Var(_) => {}
+            Expression::Cast(_, _) => {}
+            Expression::Unary(_, _) => {}
+            Expression::Binary(_, _, _) => {}
+            Expression::Assignment(_, _) => {}
+            Expression::Conditional(_, _, _) => {}
+            Expression::FunctionCall(_, _) => {}
+        };
+        TypedExpression(ty, inner)
+    }
 }
 
 // === Untyped AST aliases ===
