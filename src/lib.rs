@@ -740,8 +740,13 @@ mod tests {
         let listing = full_compile(input);
         assert_ok!(&listing);
 
-        let simple = format!("{PUBLIC_PREFIX}simple");
         let main = format!("{PUBLIC_PREFIX}main");
+        let external = format!("{PUBLIC_PREFIX}external");
+        let simple = format!("{PUBLIC_PREFIX}simple");
+        let a = format!("{PUBLIC_PREFIX}a");
+        let b = format!("{PUBLIC_PREFIX}b");
+        let c = format!("{PUBLIC_PREFIX}c");
+        let d = format!("{PUBLIC_PREFIX}d");
 
         assert_ok!(listing_is_equivalent(
             &listing.unwrap(),
@@ -767,26 +772,26 @@ mod tests {
                 pushq   %rbp
                 movq    %rsp, %rbp
                 subq    $32, %rsp
-                movl    _a(%rip), %r10d
+                movl    {a}(%rip), %r10d
                 movl    %r10d, -4(%rbp)
-                movl    _b(%rip), %r10d
+                movl    {b}(%rip), %r10d
                 addl    %r10d, -4(%rbp)
                 movl    -4(%rbp), %r10d
                 movl    %r10d, -8(%rbp)
-                movl    _c(%rip), %r10d
+                movl    {c}(%rip), %r10d
                 addl    %r10d, -8(%rbp)
                 movl    -8(%rbp), %r10d
                 movl    %r10d, -12(%rbp)
-                movl    _d(%rip), %r10d
+                movl    {d}(%rip), %r10d
                 addl    %r10d, -12(%rbp)
-                call    _external{INDIRECT_CALL_SUFFIX}
+                call    {external}{INDIRECT_CALL_SUFFIX}
                 movl    %eax, -16(%rbp)
                 movl    -12(%rbp), %r10d
                 movl    %r10d, -20(%rbp)
                 movl    -16(%rbp), %r10d
                 addl    %r10d, -20(%rbp)
                 movl    -20(%rbp), %edi
-                call    _simple{INDIRECT_CALL_SUFFIX}
+                call    {simple}
                 movl    %eax, -24(%rbp)
                 movl    -24(%rbp), %eax
                 movq    %rbp, %rsp
@@ -796,19 +801,19 @@ mod tests {
                 movq    %rbp, %rsp
                 popq    %rbp
                 ret
-                .globl  _a
+                .globl  {a}
                 .bss
                 {ALIGN_DIRECTIVE} 4
-            _a:
+            {a}:
                 .zero   4
-                .globl  _b
+                .globl  {b}
                 .data
                 {ALIGN_DIRECTIVE} 4
-            _b:
+            {b}:
                 .long   3
                 .data
                 {ALIGN_DIRECTIVE} 4
-            _d:
+            {d}:
                 .long   4
                 {FOOTER}
             "#
