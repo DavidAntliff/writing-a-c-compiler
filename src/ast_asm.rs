@@ -38,9 +38,10 @@
 //!   R11: scratch
 //!
 
+use crate::ast_c::Type;
 use crate::emitter::abi::PUBLIC_PREFIX;
 use crate::emitter::abi::{INDIRECT_CALL_SUFFIX, PRIVATE_PREFIX};
-use crate::semantics::{IdentifierAttrs, SymbolTable, Type};
+use crate::semantics::{IdentifierAttrs, SymbolTable};
 use assert_matches::assert_matches;
 use std::fmt::{Display, Formatter};
 

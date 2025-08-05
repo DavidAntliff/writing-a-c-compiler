@@ -170,10 +170,11 @@ mod tests {
         BinaryOperator, Function, Offset, Program, Reg, TopLevel, ABI_STACK_ALIGNMENT,
     };
     use crate::ast_asm::{Operand, UnaryOperator};
+    use crate::ast_c::Type;
     use crate::emitter::abi::FOOTER;
     use crate::emitter::abi::PRIVATE_PREFIX;
     use crate::emitter::abi::PUBLIC_PREFIX;
-    use crate::semantics::{IdentifierAttrs, Type};
+    use crate::semantics::IdentifierAttrs;
     use crate::tests::listing_is_equivalent;
     use assertables::assert_ok;
 
@@ -249,7 +250,10 @@ mod tests {
         let mut symbol_table = SymbolTable::new();
         symbol_table.add(
             "main".into(),
-            Type::Function { param_count: 0 },
+            Type::Function {
+                params: vec![],
+                ret: Box::new(Type::Int),
+            },
             IdentifierAttrs::Fun {
                 defined: true,
                 global: true,

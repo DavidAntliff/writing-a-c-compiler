@@ -22,7 +22,7 @@
 
 use crate::ast_c;
 use crate::id_gen::IdGenerator;
-use crate::semantics::{IdentifierAttrs, InitialValue, SymbolTable};
+use crate::semantics::{IdentifierAttrs, InitialValue, StaticInit, SymbolTable};
 use thiserror::Error;
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
@@ -171,11 +171,17 @@ fn convert_symbols_to_tacky(symbol_table: &SymbolTable) -> Result<Vec<TopLevel>,
     for (name, entry) in symbol_table.iter_sorted() {
         if let IdentifierAttrs::Static { init, global } = &entry.attrs {
             match init {
-                InitialValue::Initial(i) => tacky_defs.push(TopLevel::StaticVariable {
-                    name: name.into(),
-                    global: *global,
-                    init: *i,
-                }),
+                InitialValue::Initial(i) => {
+                    let i = match i {
+                        StaticInit::IntInit(i) => i64::from(*i),
+                        StaticInit::LongInit(i) => *i,
+                    };
+                    tacky_defs.push(TopLevel::StaticVariable {
+                        name: name.into(),
+                        global: *global,
+                        init: i,
+                    })
+                }
                 InitialValue::Tentative => tacky_defs.push(TopLevel::StaticVariable {
                     name: name.into(),
                     global: *global,
@@ -1032,7 +1038,7 @@ mod tests {
                         ),
                     ))],
                 }),
-                fun_type: ast_c::Type::Fun {
+                fun_type: ast_c::Type::Function {
                     params: vec![],
                     ret: ast_c::Type::Int.into(),
                 },
@@ -1105,7 +1111,7 @@ mod tests {
                         ),
                     ))],
                 }),
-                fun_type: ast_c::Type::Fun {
+                fun_type: ast_c::Type::Function {
                     params: vec![],
                     ret: ast_c::Type::Int.into(),
                 },
@@ -1625,7 +1631,7 @@ mod tests {
                         ))),
                     ],
                 }),
-                fun_type: ast_c::Type::Fun {
+                fun_type: ast_c::Type::Function {
                     params: vec![],
                     ret: ast_c::Type::Int.into(),
                 },
@@ -1903,7 +1909,7 @@ mod tests {
                         }),
                     ],
                 }),
-                fun_type: ast_c::Type::Fun {
+                fun_type: ast_c::Type::Function {
                     params: vec![],
                     ret: ast_c::Type::Int.into(),
                 },
@@ -1970,7 +1976,7 @@ mod tests {
                             ),
                         ))],
                     }),
-                    fun_type: ast_c::Type::Fun {
+                    fun_type: ast_c::Type::Function {
                         params: vec![ast_c::Type::Int, ast_c::Type::Int],
                         ret: ast_c::Type::Int.into(),
                     },
@@ -1980,7 +1986,7 @@ mod tests {
                     name: "bar".into(),
                     params: vec!["a".into()],
                     body: None,
-                    fun_type: ast_c::Type::Fun {
+                    fun_type: ast_c::Type::Function {
                         params: vec![ast_c::Type::Int],
                         ret: ast_c::Type::Int.into(),
                     },
@@ -2000,7 +2006,7 @@ mod tests {
                             ),
                         ))],
                     }),
-                    fun_type: ast_c::Type::Fun {
+                    fun_type: ast_c::Type::Function {
                         params: vec![],
                         ret: ast_c::Type::Int.into(),
                     },
@@ -2103,7 +2109,7 @@ mod tests {
                             )),
                         ],
                     }),
-                    fun_type: ast_c::Type::Fun {
+                    fun_type: ast_c::Type::Function {
                         params: vec![],
                         ret: ast_c::Type::Int.into(),
                     },

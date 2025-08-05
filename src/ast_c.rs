@@ -41,14 +41,25 @@
 
 use crate::lexer::Identifier;
 use derive_more::Display;
+use std::fmt::{Display, Formatter};
 
 pub(crate) type Label = String;
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Type {
+pub enum Type {
     Int,
     Long,
-    Fun { params: Vec<Type>, ret: Box<Type> },
+    Function { params: Vec<Type>, ret: Box<Type> },
+}
+
+impl Display for Type {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::Int => write!(f, "int"),
+            Type::Long => write!(f, "long"),
+            Type::Function { .. } => write!(f, "function"),
+        }
+    }
 }
 
 #[derive(Debug, Display, PartialEq, Clone)]
@@ -153,7 +164,7 @@ mod ast_base {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct TypedExpression(Type, InnerTypedExpression);
+pub(crate) struct TypedExpression(pub(crate) Type, pub(crate) InnerTypedExpression);
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum InnerTypedExpression {
@@ -181,25 +192,6 @@ pub(crate) enum Expression {
     Assignment(Box<Expression>, Box<Expression>),
     Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
     FunctionCall(Identifier, Vec<Expression>),
-}
-
-// TODO this should move elsewhere, probably.
-// Also, which kind of Type do we want to annotate with here?
-// Should it be the AST type, or the semantic analysis type?
-impl TypedExpression {
-    pub(crate) fn new(exp: Expression, ty: Type) -> TypedExpression {
-        let inner = match exp {
-            Expression::Constant(c) => InnerTypedExpression::Constant(c),
-            Expression::Var(_) => {}
-            Expression::Cast(_, _) => {}
-            Expression::Unary(_, _) => {}
-            Expression::Binary(_, _, _) => {}
-            Expression::Assignment(_, _) => {}
-            Expression::Conditional(_, _, _) => {}
-            Expression::FunctionCall(_, _) => {}
-        };
-        TypedExpression(ty, inner)
-    }
 }
 
 // === Untyped AST aliases ===

@@ -1,6 +1,6 @@
 use crate::ast_c::{
-    Block, BlockItem, Const, Declaration, Expression, ForInit, FunDecl, Label, Program, Statement,
-    StorageClass, VarDecl,
+    Block, BlockItem, Declaration, Expression, ForInit, FunDecl, Label, Program, Statement,
+    StorageClass, Type, VarDecl,
 };
 use crate::id_gen::IdGenerator;
 use crate::lexer::Identifier;
@@ -31,11 +31,14 @@ pub enum Error {
     #[error("Non-constant local static variable initialiser: {0}")]
     NonConstantLocalStaticInitialiser(Identifier),
 
-    #[error("Function redeclared as variable: {0}")]
-    FunctionRedeclaredAsVariable(Identifier),
+    #[error("Variable redeclared with different type: {0}")]
+    VariableRedeclaredWithDifferentType(Identifier),
 
     #[error("Initialiser on local extern variable declaration: {0}")]
     InitialiserOnLocalExternVariableDeclaration(Identifier),
+
+    #[error("Invalid type for variable initialiser: {0}, {1}")]
+    InvalidTypeForVariableInitialiser(Identifier, Type),
 
     #[error("Invalid lvalue")]
     InvalidLValue,
@@ -81,6 +84,9 @@ pub enum Error {
 
     #[error("Static function declaration follows non-static: {0}")]
     StaticFunctionDeclarationFollowsNonStatic(Identifier),
+
+    #[error("Function name used as variable: {0}")]
+    FunctionNameUsedAsVariable(Identifier),
 
     #[error("{0}")]
     Message(String),
@@ -681,12 +687,6 @@ fn loop_label_statement(
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Type {
-    Int,
-    Function { param_count: usize },
-}
-
-#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum IdentifierAttrs {
     /// Functions
     Fun { defined: bool, global: bool },
@@ -699,8 +699,14 @@ pub(crate) enum IdentifierAttrs {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum InitialValue {
     Tentative,
-    Initial(i64),
+    Initial(StaticInit),
     NoInitialiser,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum StaticInit {
+    IntInit(i32),
+    LongInit(i64),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -943,7 +949,7 @@ fn check_statement_goto(statement: &Statement, label_table: &LabelTable) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast_c::{BinaryOperator, Block, FunDecl, Type, VarDecl};
+    use crate::ast_c::{BinaryOperator, Block, Const, FunDecl, Type, VarDecl};
     use assert_matches::assert_matches;
     use assertables::assert_ok;
 
@@ -964,7 +970,7 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Var("x".into()))),
                     ],
                 }),
-                fun_type: Type::Fun {
+                fun_type: Type::Function {
                     params: vec![],
                     ret: Type::Int.into(),
                 },
@@ -1008,7 +1014,7 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
                     ],
                 }),
-                fun_type: Type::Fun {
+                fun_type: Type::Function {
                     params: vec![],
                     ret: Type::Int.into(),
                 },
@@ -1040,7 +1046,7 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
                     ],
                 }),
-                fun_type: Type::Fun {
+                fun_type: Type::Function {
                     params: vec![],
                     ret: Type::Int.into(),
                 },
@@ -1071,7 +1077,7 @@ mod tests {
                         BlockItem::S(Statement::Return(Expression::Constant(Const::ConstInt(0)))),
                     ],
                 }),
-                fun_type: Type::Fun {
+                fun_type: Type::Function {
                     params: vec![],
                     ret: Type::Int.into(),
                 },
@@ -1098,7 +1104,7 @@ mod tests {
                             }),
                         ],
                     }),
-                    fun_type: Type::Fun {
+                    fun_type: Type::Function {
                         params: vec![],
                         ret: Type::Int.into(),
                     },
@@ -1116,7 +1122,7 @@ mod tests {
                             }),
                         ],
                     }),
-                    fun_type: Type::Fun {
+                    fun_type: Type::Function {
                         params: vec![],
                         ret: Type::Int.into(),
                     },
@@ -1226,7 +1232,7 @@ mod tests {
                         loop_label: None,
                     })],
                 }),
-                fun_type: Type::Fun {
+                fun_type: Type::Function {
                     params: vec![],
                     ret: Type::Int.into(),
                 },
@@ -1310,14 +1316,14 @@ mod tests {
                         name: "x".into(),
                         params: vec![],
                         body: None,
-                        fun_type: Type::Fun {
+                        fun_type: Type::Function {
                             params: vec![],
                             ret: Type::Int.into(),
                         },
                         storage_class: Some(StorageClass::Static), // not allowed
                     }))],
                 }),
-                fun_type: Type::Fun {
+                fun_type: Type::Function {
                     params: vec![],
                     ret: Type::Int.into(),
                 },
