@@ -7,7 +7,7 @@ use crate::ast_c::{
 use crate::lexer::Identifier;
 use crate::semantics::{Error, IdentifierAttrs, InitialValue, StaticInit, SymbolTable};
 
-pub(crate) fn type_checking(program: &Program) -> Result<SymbolTable, Error> {
+pub(crate) fn type_checking(program: &Program) -> Result<(TypedProgram, SymbolTable), Error> {
     let mut symbol_table = SymbolTable::new();
 
     let mut typed_program = TypedProgram {
@@ -27,7 +27,7 @@ pub(crate) fn type_checking(program: &Program) -> Result<SymbolTable, Error> {
 
     //dbg!(&typed_program);
 
-    Ok(symbol_table)
+    Ok((typed_program, symbol_table))
 }
 
 fn typecheck_file_scope_variable_declaration(

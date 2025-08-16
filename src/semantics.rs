@@ -1,6 +1,6 @@
 use crate::ast_c::{
     Block, BlockItem, Declaration, Expression, ForInit, FunDecl, Label, Program, Statement,
-    StorageClass, Type, VarDecl,
+    StorageClass, Type, TypedProgram, VarDecl,
 };
 use crate::id_gen::IdGenerator;
 use crate::lexer::Identifier;
@@ -92,18 +92,18 @@ pub enum Error {
     Message(String),
 }
 
-pub(crate) fn analyse(program: &mut Program) -> Result<SymbolTable, Error> {
+pub(crate) fn analyse(program: &mut Program) -> Result<(TypedProgram, SymbolTable), Error> {
     identifier_resolution(program)?;
 
     loop_labeling(program)?;
 
-    let symbol_table = typecheck::type_checking(program)?;
+    let (typed_program, symbol_table) = typecheck::type_checking(program)?;
 
     let _label_table = goto_label_resolution(program)?;
 
     // TODO: combine the tables into one symbol table
 
-    Ok(symbol_table)
+    Ok((typed_program, symbol_table))
 }
 
 #[derive(Debug, Clone)]

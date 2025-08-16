@@ -3,8 +3,10 @@
 //! ASDL:
 //!   program = Program(top_level*)
 //!   top_level = Function(identifier name, bool global, identifier* params, instruction* body)
-//!               | StaticVariable(identifier name, bool global, int init)
+//!               | StaticVariable(identifier name, bool global, type t, static_init init)
 //!   instruction = Return(val)
+//!               | SignExtend(val src, val dst)
+//!               | Truncate(val src, val dst)
 //!               | Unary(unary_operator, val src, val dst)
 //!               | Binary(binary_operator, val src1, val src2, val dst)
 //!               | Copy(val src, val dst)
@@ -13,7 +15,8 @@
 //!               | JumpIfNotZero(val condition, identifier target)
 //!               | Label(identifier)
 //!               | FunCall(identifier name, val* args, val dst)
-//!   val = Constant(int) | Var(identifier)
+//!   val = Constant(const) | Var(identifier)
+//!   const = ConstInt(int) | ConstLong(int)
 //!   unary_operator = Complement | Negate | Not
 //!   binary_operator = Add | Subtract | Multiply | Divide | Remainder
 //!                   | BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
@@ -139,7 +142,7 @@ pub struct TackyError {
 }
 
 pub(crate) fn emit_program(
-    program: &ast_c::Program,
+    program: &ast_c::TypedProgram,
     symbol_table: &SymbolTable,
 ) -> Result<Program, TackyError> {
     let mut id_gen = IdGenerator::new();
@@ -147,13 +150,13 @@ pub(crate) fn emit_program(
 
     for declaration in &program.declarations {
         match declaration {
-            ast_c::Declaration::FunDecl(fun_decl) => {
+            ast_c::TypedDeclaration::FunDecl(fun_decl) => {
                 let fun_def = emit_function_definition(fun_decl, &mut id_gen, symbol_table);
                 if let Some(fun_def) = fun_def {
                     top_level.push(TopLevel::Function(fun_def));
                 }
             }
-            ast_c::Declaration::VarDecl(_) => {
+            ast_c::TypedDeclaration::VarDecl(_) => {
                 // Do not emit tacky for file-scope variable declarations
             }
         }
@@ -196,7 +199,7 @@ fn convert_symbols_to_tacky(symbol_table: &SymbolTable) -> Result<Vec<TopLevel>,
 }
 
 fn emit_function_definition(
-    function_decl: &ast_c::FunDecl,
+    function_decl: &ast_c::TypedFunDecl,
     id_gen: &mut IdGenerator,
     symbol_table: &SymbolTable,
 ) -> Option<Function> {
@@ -240,16 +243,26 @@ fn next_var(id_gen: &mut IdGenerator) -> Identifier {
 
 // Previously called "emit_tacky"
 fn emit_expression(
-    exp: &ast_c::Expression,
+    exp: &ast_c::TypedExpression,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
 ) -> Val {
     match exp {
-        ast_c::Expression::Constant(ast_c::Const::ConstInt(c)) => Val::Constant(i64::from(*c)),
-        ast_c::Expression::Constant(ast_c::Const::ConstLong(_)) => todo!(),
-        ast_c::Expression::Var(identifier) => Val::Var(identifier.into()),
-        ast_c::Expression::Cast(_, _) => todo!(),
-        ast_c::Expression::Unary(op, inner) => {
+        ast_c::TypedExpression(
+            t,
+            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(c)),
+        ) => Val::Constant(i64::from(*c)),
+        ast_c::TypedExpression(
+            t,
+            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstLong(_)),
+        ) => {
+            todo!()
+        }
+        ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Var(identifier)) => {
+            Val::Var(identifier.into())
+        }
+        ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Cast(_, _)) => todo!(),
+        ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Unary(op, inner)) => {
             let src = emit_expression(inner, instructions, id_gen);
             let dst = Val::Var(next_var(id_gen));
             let tacky_op = convert_unop(op);
@@ -262,7 +275,10 @@ fn emit_expression(
         }
 
         // Handle short-circuit evaluation for And / Or
-        ast_c::Expression::Binary(ast_c::BinaryOperator::And, e1, e2) => {
+        ast_c::TypedExpression(
+            t,
+            ast_c::InnerTypedExpression::Binary(ast_c::BinaryOperator::And, e1, e2),
+        ) => {
             let id = id_gen.next();
             let label_false: Identifier = format!("and_false.{id}").into();
             let label_end: Identifier = format!("and_end.{id}").into();
@@ -294,7 +310,10 @@ fn emit_expression(
             dst
         }
 
-        ast_c::Expression::Binary(ast_c::BinaryOperator::Or, e1, e2) => {
+        ast_c::TypedExpression(
+            t,
+            ast_c::InnerTypedExpression::Binary(ast_c::BinaryOperator::Or, e1, e2),
+        ) => {
             let id = id_gen.next();
             let label_true: Identifier = format!("or_true.{id}").into();
             let label_end: Identifier = format!("or_end.{id}").into();
@@ -326,7 +345,7 @@ fn emit_expression(
             dst
         }
 
-        ast_c::Expression::Binary(op, e1, e2) => {
+        ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Binary(op, e1, e2)) => {
             // Unsequenced - indeterminate order of evaluation
             let src1 = emit_expression(e1, instructions, id_gen);
             let src2 = emit_expression(e2, instructions, id_gen);
@@ -341,8 +360,8 @@ fn emit_expression(
             dst
         }
 
-        ast_c::Expression::Assignment(lhs, rhs) => {
-            if let ast_c::Expression::Var(v) = &**lhs {
+        ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Assignment(lhs, rhs)) => {
+            if let ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Var(v)) = &**lhs {
                 let result = emit_expression(rhs, instructions, id_gen);
                 instructions.push(Instruction::Copy {
                     src: result,
@@ -354,11 +373,11 @@ fn emit_expression(
             }
         }
 
-        ast_c::Expression::Conditional(cond, e1, e2) => {
+        ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Conditional(cond, e1, e2)) => {
             emit_exp_conditional(cond, e1, e2, instructions, id_gen)
         }
 
-        ast_c::Expression::FunctionCall(name, args) => {
+        ast_c::TypedExpression(t, ast_c::InnerTypedExpression::FunctionCall(name, args)) => {
             let dst = Val::Var(next_var(id_gen));
             let tacky_args: Vec<Val> = args
                 .iter()
@@ -407,7 +426,7 @@ fn convert_binop(op: &ast_c::BinaryOperator) -> BinaryOperator {
 }
 
 fn emit_block(
-    block: &ast_c::Block,
+    block: &ast_c::TypedBlock,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
     symbol_table: &SymbolTable,
@@ -419,19 +438,19 @@ fn emit_block(
 }
 
 fn emit_block_item(
-    item: &ast_c::BlockItem,
+    item: &ast_c::TypedBlockItem,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
     symbol_table: &SymbolTable,
 ) -> Option<Instruction> {
     match item {
-        ast_c::BlockItem::S(statement) => {
+        ast_c::TypedBlockItem::S(statement) => {
             if let Some(instruction) = emit_statement(statement, instructions, id_gen, symbol_table)
             {
                 instructions.push(instruction);
             }
         }
-        ast_c::BlockItem::D(declaration) => {
+        ast_c::TypedBlockItem::D(declaration) => {
             emit_declaration(declaration, instructions, id_gen, symbol_table);
         }
     }
@@ -439,17 +458,17 @@ fn emit_block_item(
 }
 
 fn emit_declaration(
-    decl: &ast_c::Declaration,
+    decl: &ast_c::TypedDeclaration,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
     symbol_table: &SymbolTable,
 ) -> Option<Instruction> {
     match decl {
-        ast_c::Declaration::FunDecl(decl) => {
+        ast_c::TypedDeclaration::FunDecl(decl) => {
             let def = emit_function_definition(decl, id_gen, symbol_table);
             assert_eq!(def, None, "Function declaration should not have a body");
         }
-        ast_c::Declaration::VarDecl(decl) => {
+        ast_c::TypedDeclaration::VarDecl(decl) => {
             emit_variable_declaration(decl, instructions, id_gen);
         }
     }
@@ -457,12 +476,12 @@ fn emit_declaration(
 }
 
 fn emit_variable_declaration(
-    ast_c::VarDecl {
+    ast_c::TypedVarDecl {
         name,
         init,
         var_type: _,
         storage_class,
-    }: &ast_c::VarDecl,
+    }: &ast_c::TypedVarDecl,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
 ) -> Option<Instruction> {
@@ -482,48 +501,52 @@ fn emit_variable_declaration(
 }
 
 fn emit_statement(
-    statement: &ast_c::Statement,
+    statement: &ast_c::TypedStatement,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
     symbol_table: &SymbolTable,
 ) -> Option<Instruction> {
     match statement {
-        ast_c::Statement::Return(exp) => {
+        ast_c::TypedStatement::Return(exp) => {
             let val = emit_expression(exp, instructions, id_gen);
             Some(Instruction::Return(val))
         }
-        ast_c::Statement::Expression(exp) => {
+        ast_c::TypedStatement::Expression(exp) => {
             let _ = emit_expression(exp, instructions, id_gen);
             // No need to return anything for an expression statement
             None
         }
-        ast_c::Statement::If {
+        ast_c::TypedStatement::If {
             condition,
             then_block: then,
             else_block: else_,
         } => emit_statement_if(condition, then, else_, instructions, id_gen, symbol_table),
-        ast_c::Statement::Labeled { label, statement } => {
+        ast_c::TypedStatement::Labeled { label, statement } => {
             instructions.push(Instruction::Label(label.clone().into()));
             emit_statement(statement, instructions, id_gen, symbol_table)
         }
-        ast_c::Statement::Goto(label) => {
+        ast_c::TypedStatement::Goto(label) => {
             instructions.push(emit_jump(&label.into()));
             None
         }
-        ast_c::Statement::Compound(block) => emit_block(block, instructions, id_gen, symbol_table),
-        ast_c::Statement::Break(Some(label)) => {
+        ast_c::TypedStatement::Compound(block) => {
+            emit_block(block, instructions, id_gen, symbol_table)
+        }
+        ast_c::TypedStatement::Break(Some(label)) => {
             instructions.push(emit_jump(&break_label(label)));
             None
         }
-        ast_c::Statement::Break(None) => panic!("Break without label is not supported in Tacky"),
-        ast_c::Statement::Continue(Some(label)) => {
+        ast_c::TypedStatement::Break(None) => {
+            panic!("Break without label is not supported in Tacky")
+        }
+        ast_c::TypedStatement::Continue(Some(label)) => {
             instructions.push(emit_jump(&continue_label(label)));
             None
         }
-        ast_c::Statement::Continue(None) => {
+        ast_c::TypedStatement::Continue(None) => {
             panic!("Continue without label is not supported in Tacky")
         }
-        ast_c::Statement::While {
+        ast_c::TypedStatement::While {
             condition,
             body,
             loop_label,
@@ -535,7 +558,7 @@ fn emit_statement(
             id_gen,
             symbol_table,
         ),
-        ast_c::Statement::DoWhile {
+        ast_c::TypedStatement::DoWhile {
             body,
             condition,
             loop_label,
@@ -547,7 +570,7 @@ fn emit_statement(
             id_gen,
             symbol_table,
         ),
-        ast_c::Statement::For {
+        ast_c::TypedStatement::For {
             init,
             condition,
             post,
@@ -563,14 +586,14 @@ fn emit_statement(
             id_gen,
             symbol_table,
         ),
-        ast_c::Statement::Null => None,
+        ast_c::TypedStatement::Null => None,
     }
 }
 
 fn emit_statement_if(
-    condition: &ast_c::Expression,
-    then: &ast_c::Statement,
-    else_: &Option<Box<ast_c::Statement>>,
+    condition: &ast_c::TypedExpression,
+    then: &ast_c::TypedStatement,
+    else_: &Option<Box<ast_c::TypedStatement>>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
     symbol_table: &SymbolTable,
@@ -633,9 +656,9 @@ fn emit_statement_if(
 }
 
 fn emit_exp_conditional(
-    condition: &ast_c::Expression,
-    e1: &ast_c::Expression,
-    e2: &ast_c::Expression,
+    condition: &ast_c::TypedExpression,
+    e1: &ast_c::TypedExpression,
+    e2: &ast_c::TypedExpression,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
 ) -> Val {
@@ -737,8 +760,8 @@ fn emit_jump(label: &Identifier) -> Instruction {
 }
 
 fn emit_do_while(
-    body: &ast_c::Statement,
-    condition: &ast_c::Expression,
+    body: &ast_c::TypedStatement,
+    condition: &ast_c::TypedExpression,
     loop_label: &Option<crate::lexer::Identifier>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
@@ -775,8 +798,8 @@ fn emit_do_while(
 }
 
 fn emit_while(
-    condition: &ast_c::Expression,
-    body: &ast_c::Statement,
+    condition: &ast_c::TypedExpression,
+    body: &ast_c::TypedStatement,
     loop_label: &Option<crate::lexer::Identifier>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
@@ -816,10 +839,10 @@ fn emit_while(
 
 #[allow(clippy::too_many_arguments)]
 fn emit_for(
-    init: &ast_c::ForInit,
-    condition: &Option<ast_c::Expression>,
-    post: &Option<ast_c::Expression>,
-    body: &ast_c::Statement,
+    init: &ast_c::TypedForInit,
+    condition: &Option<ast_c::TypedExpression>,
+    post: &Option<ast_c::TypedExpression>,
+    body: &ast_c::TypedStatement,
     loop_label: &Option<crate::lexer::Identifier>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
@@ -833,13 +856,13 @@ fn emit_for(
     let break_label = break_label(loop_label.clone());
 
     // Emit initialization
-    if let ast_c::ForInit::InitExp(Some(exp)) = init {
+    if let ast_c::TypedForInit::InitExp(Some(exp)) = init {
         let v = emit_expression(exp, instructions, id_gen);
         instructions.push(Instruction::Copy {
             src: v,
             dst: Val::Var(next_var(id_gen)),
         });
-    } else if let ast_c::ForInit::InitDecl(decl) = init {
+    } else if let ast_c::TypedForInit::InitDecl(decl) = init {
         let _ = emit_variable_declaration(decl, instructions, id_gen);
     }
 
@@ -887,7 +910,10 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_constant_expression() {
-        let exp = ast_c::Expression::Constant(ast_c::Const::ConstInt(2));
+        let exp = ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+        );
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
 
@@ -900,9 +926,15 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_unary_expression() {
-        let exp = ast_c::Expression::Unary(
-            ast_c::UnaryOperator::Complement,
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
+        let exp = ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Unary(
+                ast_c::UnaryOperator::Complement,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                )),
+            ),
         );
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
@@ -923,15 +955,29 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_nested_unary_expression() {
-        let exp = ast_c::Expression::Unary(
-            ast_c::UnaryOperator::Negate,
-            Box::new(ast_c::Expression::Unary(
-                ast_c::UnaryOperator::Complement,
-                Box::new(ast_c::Expression::Unary(
-                    ast_c::UnaryOperator::Negate,
-                    Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(8))),
+        let exp = ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Unary(
+                ast_c::UnaryOperator::Negate,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Unary(
+                        ast_c::UnaryOperator::Complement,
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Unary(
+                                ast_c::UnaryOperator::Negate,
+                                Box::new(ast_c::TypedExpression(
+                                    ast_c::Type::Int,
+                                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(
+                                        8,
+                                    )),
+                                )),
+                            ),
+                        )),
+                    ),
                 )),
-            )),
+            ),
         );
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
@@ -964,9 +1010,11 @@ mod tests {
 
     #[test]
     fn test_emit_statement_return_constant() {
-        let (ins, instructions) = do_emit_statement(&ast_c::Statement::Return(
-            ast_c::Expression::Constant(ast_c::Const::ConstInt(2)),
-        ));
+        let (ins, instructions) =
+            do_emit_statement(&ast_c::TypedStatement::Return(ast_c::TypedExpression(
+                ast_c::Type::Int,
+                ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+            )));
 
         assert_eq!(ins, Some(Instruction::Return(Val::Constant(2))));
         assert!(instructions.is_empty());
@@ -975,9 +1023,15 @@ mod tests {
     #[test]
     fn test_emit_statement_return_unary() {
         let (ins, instructions) =
-            do_emit_statement(&ast_c::Statement::Return(ast_c::Expression::Unary(
-                ast_c::UnaryOperator::Negate,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
+            do_emit_statement(&ast_c::TypedStatement::Return(ast_c::TypedExpression(
+                ast_c::Type::Int,
+                ast_c::InnerTypedExpression::Unary(
+                    ast_c::UnaryOperator::Negate,
+                    Box::new(ast_c::TypedExpression(
+                        ast_c::Type::Int,
+                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                    )),
+                ),
             )));
 
         assert_eq!(ins, Some(Instruction::Return(Val::Var("tmp.0".into()))));
@@ -994,10 +1048,19 @@ mod tests {
     #[test]
     fn test_emit_statement_expression() {
         let (ins, instructions) =
-            do_emit_statement(&ast_c::Statement::Expression(ast_c::Expression::Binary(
-                ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
+            do_emit_statement(&ast_c::TypedStatement::Expression(ast_c::TypedExpression(
+                ast_c::Type::Int,
+                ast_c::InnerTypedExpression::Binary(
+                    ast_c::BinaryOperator::Add,
+                    Box::new(ast_c::TypedExpression(
+                        ast_c::Type::Int,
+                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                    )),
+                    Box::new(ast_c::TypedExpression(
+                        ast_c::Type::Int,
+                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                    )),
+                ),
             )));
 
         // No return value for expression statement
@@ -1045,10 +1108,10 @@ mod tests {
                 storage_class: None,
             })],
         };
-        let symbol_table = type_checking(&program).unwrap();
+        let (typed_program, symbol_table) = type_checking(&program).unwrap();
 
         assert_eq!(
-            emit_program(&program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &symbol_table).unwrap(),
             Program {
                 top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
@@ -1118,10 +1181,10 @@ mod tests {
                 storage_class: None,
             })],
         };
-        let symbol_table = type_checking(&program).unwrap();
+        let (typed_program, symbol_table) = type_checking(&program).unwrap();
 
         assert_eq!(
-            emit_program(&program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &symbol_table).unwrap(),
             Program {
                 top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
@@ -1161,14 +1224,14 @@ mod tests {
         );
     }
 
-    fn do_emit_tacky(exp: &ast_c::Expression) -> (Val, Vec<Instruction>) {
+    fn do_emit_tacky(exp: &ast_c::TypedExpression) -> (Val, Vec<Instruction>) {
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
         let val = emit_expression(exp, &mut instructions, &mut id_gen);
         (val, instructions)
     }
 
-    fn do_emit_statement(stmt: &ast_c::Statement) -> (Option<Instruction>, Vec<Instruction>) {
+    fn do_emit_statement(stmt: &ast_c::TypedStatement) -> (Option<Instruction>, Vec<Instruction>) {
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
         let symbol_table = SymbolTable::new();
@@ -1178,9 +1241,15 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_unary_not() {
-        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Unary(
-            ast_c::UnaryOperator::Not,
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+        let (val, instructions) = do_emit_tacky(&ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Unary(
+                ast_c::UnaryOperator::Not,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                )),
+            ),
         ));
 
         assert_eq!(val, Val::Var("tmp.0".into()));
@@ -1208,14 +1277,29 @@ mod tests {
         //   Label(false_label)
         //   Copy(0, result)
         //   Label(end)
-        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
-            ast_c::BinaryOperator::And,
-            Box::new(ast_c::Expression::Binary(
-                ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
-            )),
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
+        let (val, instructions) = do_emit_tacky(&ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Binary(
+                ast_c::BinaryOperator::And,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Binary(
+                        ast_c::BinaryOperator::Add,
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                        )),
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        )),
+                    ),
+                )),
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                )),
+            ),
         ));
 
         assert_eq!(val, Val::Var("tmp.2".into()));
@@ -1267,14 +1351,29 @@ mod tests {
         //   Label(true_label)
         //   Copy(1, result)
         //   Label(end)
-        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
-            ast_c::BinaryOperator::Or,
-            Box::new(ast_c::Expression::Binary(
-                ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
-            )),
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
+        let (val, instructions) = do_emit_tacky(&ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Binary(
+                ast_c::BinaryOperator::Or,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Binary(
+                        ast_c::BinaryOperator::Add,
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                        )),
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        )),
+                    ),
+                )),
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                )),
+            ),
         ));
 
         assert_eq!(val, Val::Var("tmp.2".into()));
@@ -1317,14 +1416,29 @@ mod tests {
         //   e1 || e2 && e3
         // Equivalent to:
         //   e1 || (e2 && e3)
-        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
-            ast_c::BinaryOperator::Or,
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-            Box::new(ast_c::Expression::Binary(
-                ast_c::BinaryOperator::And,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
-            )),
+        let (val, instructions) = do_emit_tacky(&ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Binary(
+                ast_c::BinaryOperator::Or,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                )),
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Binary(
+                        ast_c::BinaryOperator::And,
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        )),
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                        )),
+                    ),
+                )),
+            ),
         ));
 
         assert_eq!(val, Val::Var("tmp.3".into()));
@@ -1381,14 +1495,29 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_binary_equal() {
-        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
-            ast_c::BinaryOperator::Equal,
-            Box::new(ast_c::Expression::Binary(
-                ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
-            )),
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
+        let (val, instructions) = do_emit_tacky(&ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Binary(
+                ast_c::BinaryOperator::Equal,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Binary(
+                        ast_c::BinaryOperator::Add,
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                        )),
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        )),
+                    ),
+                )),
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                )),
+            ),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1413,14 +1542,29 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_binary_not_equal() {
-        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
-            ast_c::BinaryOperator::NotEqual,
-            Box::new(ast_c::Expression::Binary(
-                ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
-            )),
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
+        let (val, instructions) = do_emit_tacky(&ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Binary(
+                ast_c::BinaryOperator::NotEqual,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Binary(
+                        ast_c::BinaryOperator::Add,
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                        )),
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        )),
+                    ),
+                )),
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                )),
+            ),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1445,14 +1589,29 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_binary_less_than() {
-        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
-            ast_c::BinaryOperator::LessThan,
-            Box::new(ast_c::Expression::Binary(
-                ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
-            )),
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
+        let (val, instructions) = do_emit_tacky(&ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Binary(
+                ast_c::BinaryOperator::LessThan,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Binary(
+                        ast_c::BinaryOperator::Add,
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                        )),
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        )),
+                    ),
+                )),
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                )),
+            ),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1477,14 +1636,29 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_binary_greater_than() {
-        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
-            ast_c::BinaryOperator::GreaterThan,
-            Box::new(ast_c::Expression::Binary(
-                ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
-            )),
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
+        let (val, instructions) = do_emit_tacky(&ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Binary(
+                ast_c::BinaryOperator::GreaterThan,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Binary(
+                        ast_c::BinaryOperator::Add,
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                        )),
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        )),
+                    ),
+                )),
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                )),
+            ),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1509,14 +1683,29 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_binary_less_or_equal() {
-        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
-            ast_c::BinaryOperator::LessOrEqual,
-            Box::new(ast_c::Expression::Binary(
-                ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
-            )),
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
+        let (val, instructions) = do_emit_tacky(&ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Binary(
+                ast_c::BinaryOperator::LessOrEqual,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Binary(
+                        ast_c::BinaryOperator::Add,
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                        )),
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        )),
+                    ),
+                )),
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                )),
+            ),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1541,14 +1730,29 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_binary_greater_or_equal() {
-        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Binary(
-            ast_c::BinaryOperator::GreaterOrEqual,
-            Box::new(ast_c::Expression::Binary(
-                ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
-            )),
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
+        let (val, instructions) = do_emit_tacky(&ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Binary(
+                ast_c::BinaryOperator::GreaterOrEqual,
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Binary(
+                        ast_c::BinaryOperator::Add,
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                        )),
+                        Box::new(ast_c::TypedExpression(
+                            ast_c::Type::Int,
+                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        )),
+                    ),
+                )),
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                )),
+            ),
         ));
 
         assert_eq!(val, Val::Var("tmp.1".into()));
@@ -1638,7 +1842,7 @@ mod tests {
                 storage_class: None,
             })],
         };
-        let symbol_table = type_checking(&program).unwrap();
+        let (typed_program, symbol_table) = type_checking(&program).unwrap();
 
         // Listing 5-14: Expected TACKY:
         //   tmp.2 = 10 + 1
@@ -1649,7 +1853,7 @@ mod tests {
         //   c.0 = tmp.4
         //   Return(b.0)
         assert_eq!(
-            emit_program(&program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &symbol_table).unwrap(),
             Program {
                 top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
@@ -1701,14 +1905,24 @@ mod tests {
         // if (1 + 2) {
         //     return 1;
         // }
-        let (ins, instructions) = do_emit_statement(&ast_c::Statement::If {
-            condition: ast_c::Expression::Binary(
-                ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
+        let (ins, instructions) = do_emit_statement(&ast_c::TypedStatement::If {
+            condition: ast_c::TypedExpression(
+                ast_c::Type::Int,
+                ast_c::InnerTypedExpression::Binary(
+                    ast_c::BinaryOperator::Add,
+                    Box::new(ast_c::TypedExpression(
+                        ast_c::Type::Int,
+                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                    )),
+                    Box::new(ast_c::TypedExpression(
+                        ast_c::Type::Int,
+                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                    )),
+                ),
             ),
-            then_block: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
-                ast_c::Const::ConstInt(1),
+            then_block: Box::new(ast_c::TypedStatement::Return(ast_c::TypedExpression(
+                ast_c::Type::Int,
+                ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
             ))),
             else_block: None,
         });
@@ -1750,17 +1964,30 @@ mod tests {
         // } else {
         //     return 2;
         // }
-        let (ins, instructions) = do_emit_statement(&ast_c::Statement::If {
-            condition: ast_c::Expression::Binary(
-                ast_c::BinaryOperator::Add,
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
+        let (ins, instructions) = do_emit_statement(&ast_c::TypedStatement::If {
+            condition: ast_c::TypedExpression(
+                ast_c::Type::Int,
+                ast_c::InnerTypedExpression::Binary(
+                    ast_c::BinaryOperator::Add,
+                    Box::new(ast_c::TypedExpression(
+                        ast_c::Type::Int,
+                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                    )),
+                    Box::new(ast_c::TypedExpression(
+                        ast_c::Type::Int,
+                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                    )),
+                ),
             ),
-            then_block: Box::new(ast_c::Statement::Return(ast_c::Expression::Constant(
-                ast_c::Const::ConstInt(1),
+            then_block: Box::new(ast_c::TypedStatement::Return(ast_c::TypedExpression(
+                ast_c::Type::Int,
+                ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
             ))),
-            else_block: Some(Box::new(ast_c::Statement::Return(
-                ast_c::Expression::Constant(ast_c::Const::ConstInt(2)),
+            else_block: Some(Box::new(ast_c::TypedStatement::Return(
+                ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                ),
             ))),
         });
 
@@ -1808,10 +2035,22 @@ mod tests {
     fn test_emit_conditional() {
         // Page 127
         // 1 ? 2 : 3
-        let (val, instructions) = do_emit_tacky(&ast_c::Expression::Conditional(
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
-            Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
+        let (val, instructions) = do_emit_tacky(&ast_c::TypedExpression(
+            ast_c::Type::Int,
+            ast_c::InnerTypedExpression::Conditional(
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                )),
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                )),
+                Box::new(ast_c::TypedExpression(
+                    ast_c::Type::Int,
+                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                )),
+            ),
         ));
 
         // Expected TACKY (Listing 6-14):
@@ -1916,7 +2155,7 @@ mod tests {
                 storage_class: None,
             })],
         };
-        let symbol_table = type_checking(&program).unwrap();
+        let (typed_program, symbol_table) = type_checking(&program).unwrap();
 
         // Listing 5-14: Expected TACKY:
         //   Jump(label1)
@@ -1927,7 +2166,7 @@ mod tests {
         //   .label2
         //     Return(2)
         assert_eq!(
-            emit_program(&program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &symbol_table).unwrap(),
             Program {
                 top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
@@ -2014,10 +2253,10 @@ mod tests {
                 }),
             ],
         };
-        let symbol_table = type_checking(&program).unwrap();
+        let (typed_program, symbol_table) = type_checking(&program).unwrap();
 
         assert_eq!(
-            emit_program(&program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &symbol_table).unwrap(),
             Program {
                 top_level: vec![
                     TopLevel::Function(Function {
@@ -2117,11 +2356,11 @@ mod tests {
                 }),
             ],
         };
-        let symbol_table = type_checking(&program).unwrap();
+        let (typed_program, symbol_table) = type_checking(&program).unwrap();
 
         // Expected TACKY:
         assert_eq!(
-            emit_program(&program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &symbol_table).unwrap(),
             Program {
                 top_level: vec![
                     TopLevel::Function(Function {
