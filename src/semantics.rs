@@ -223,12 +223,11 @@ fn resolve_local_variable_declaration(
     id_gen: &mut IdGenerator,
 ) -> Result<VarDecl, Error> {
     // Check for conflicting declarations
-    if let Some(prev_entry) = identifier_map.get(name) {
-        if prev_entry.from_current_scope
-            && !(prev_entry.has_linkage && storage_class == &Some(StorageClass::Extern))
-        {
-            return Err(Error::ConflictingVariableDeclaration(name.clone()));
-        }
+    if let Some(prev_entry) = identifier_map.get(name)
+        && prev_entry.from_current_scope
+        && !(prev_entry.has_linkage && storage_class == &Some(StorageClass::Extern))
+    {
+        return Err(Error::ConflictingVariableDeclaration(name.clone()));
     }
 
     // Update the identifier map

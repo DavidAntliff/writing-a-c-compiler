@@ -188,6 +188,13 @@ pub(crate) enum InnerTypedExpression {
     FunctionCall(Identifier, Vec<TypedExpression>),
 }
 
+impl InnerTypedExpression {
+    #[allow(dead_code)]
+    pub(crate) fn constant(v: impl Into<Const>) -> Self {
+        Self::Constant(v.into())
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Expression {
     Constant(Const),
@@ -198,6 +205,18 @@ pub(crate) enum Expression {
     Assignment(Box<Expression>, Box<Expression>),
     Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
     FunctionCall(Identifier, Vec<Expression>),
+}
+
+impl Expression {
+    #[allow(dead_code)]
+    pub(crate) fn constant(v: impl Into<Const>) -> Self {
+        Self::Constant(v.into())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn var(name: impl Into<String>) -> Self {
+        Self::Var(name.into())
+    }
 }
 
 // === Untyped AST aliases ===
@@ -261,5 +280,17 @@ impl From<&Const> for i64 {
             Const::ConstInt(i) => *i as i64,
             Const::ConstLong(i) => *i,
         }
+    }
+}
+
+impl From<i32> for Const {
+    fn from(i: i32) -> Self {
+        Const::ConstInt(i)
+    }
+}
+
+impl From<i64> for Const {
+    fn from(i: i64) -> Self {
+        Const::ConstLong(i)
     }
 }

@@ -116,6 +116,17 @@ pub(crate) enum Val {
     Var(Identifier),
 }
 
+impl Val {
+    pub(crate) fn constant(v: impl Into<ast_c::Const>) -> Self {
+        Val::Constant(v.into())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn var(v: impl Into<String>) -> Self {
+        Val::Var(v.into().into())
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub(crate) enum UnaryOperator {
     Complement,
@@ -242,9 +253,7 @@ fn emit_function_definition(
     assert!(val.is_none(), "emit_block should return None");
 
     // Add a Return(0) to the end of all functions (see page 112)
-    instructions.push(Instruction::Return(Val::Constant(ast_c::Const::ConstInt(
-        0,
-    ))));
+    instructions.push(Instruction::Return(Val::constant(0)));
 
     let global = symbol_table.expect_fun_global(&function_decl.name);
 
@@ -260,6 +269,7 @@ fn make_temporary(id_gen: &mut IdGenerator) -> Identifier {
     format!("tmp.{}", id_gen.next()).into()
 }
 
+#[expect(dead_code)]
 fn make_label(prefix: &str, id_gen: &mut IdGenerator) -> Identifier {
     format!("{prefix}.{}", id_gen.next()).into()
 }
@@ -293,7 +303,7 @@ fn emit_expression(
         ast_c::TypedExpression(_, ast_c::InnerTypedExpression::Constant(c)) => {
             Val::Constant(c.clone())
         }
-        ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Var(identifier)) => {
+        ast_c::TypedExpression(_, ast_c::InnerTypedExpression::Var(identifier)) => {
             Val::Var(identifier.into())
         }
         ast_c::TypedExpression(_, ast_c::InnerTypedExpression::Cast(t, inner)) => {
@@ -347,7 +357,7 @@ fn emit_expression(
             });
             let dst = make_tacky_variable(t, id_gen, symbol_table);
             instructions.push(Instruction::Copy {
-                src: Val::Constant(ast_c::Const::ConstInt(1)),
+                src: Val::constant(1),
                 dst: dst.clone(),
             });
             instructions.push(Instruction::Jump {
@@ -355,7 +365,7 @@ fn emit_expression(
             });
             instructions.push(Instruction::Label(label_false));
             instructions.push(Instruction::Copy {
-                src: Val::Constant(ast_c::Const::ConstInt(0)),
+                src: Val::constant(0),
                 dst: dst.clone(),
             });
             instructions.push(Instruction::Label(label_end));
@@ -380,7 +390,7 @@ fn emit_expression(
             });
             let dst = make_tacky_variable(t, id_gen, symbol_table);
             instructions.push(Instruction::Copy {
-                src: Val::Constant(ast_c::Const::ConstInt(0)),
+                src: Val::constant(0),
                 dst: dst.clone(),
             });
             instructions.push(Instruction::Jump {
@@ -388,7 +398,7 @@ fn emit_expression(
             });
             instructions.push(Instruction::Label(label_true));
             instructions.push(Instruction::Copy {
-                src: Val::Constant(ast_c::Const::ConstInt(1)),
+                src: Val::constant(1),
                 dst: dst.clone(),
             });
             instructions.push(Instruction::Label(label_end));
@@ -410,8 +420,8 @@ fn emit_expression(
             dst
         }
 
-        ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Assignment(lhs, rhs)) => {
-            if let ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Var(v)) = &**lhs {
+        ast_c::TypedExpression(_, ast_c::InnerTypedExpression::Assignment(lhs, rhs)) => {
+            if let ast_c::TypedExpression(_, ast_c::InnerTypedExpression::Var(v)) = &**lhs {
                 let result = emit_expression(rhs, instructions, id_gen, symbol_table);
                 instructions.push(Instruction::Copy {
                     src: result,
@@ -423,7 +433,7 @@ fn emit_expression(
             }
         }
 
-        ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Conditional(cond, e1, e2)) => {
+        ast_c::TypedExpression(_, ast_c::InnerTypedExpression::Conditional(cond, e1, e2)) => {
             emit_exp_conditional(cond, e1, e2, instructions, id_gen, symbol_table)
         }
 
@@ -957,17 +967,15 @@ mod tests {
 
     #[test]
     fn test_emit_tacky_constant_expression() {
-        let exp = ast_c::TypedExpression(
-            ast_c::Type::Int,
-            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
-        );
+        let exp =
+            ast_c::TypedExpression(ast_c::Type::Int, ast_c::InnerTypedExpression::constant(2));
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
         let mut symbol_table = SymbolTable::new();
 
         assert_eq!(
             emit_expression(&exp, &mut instructions, &mut id_gen, &mut symbol_table),
-            Val::Constant(ast_c::Const::ConstInt(2))
+            Val::constant(2)
         );
         assert!(instructions.is_empty());
     }
@@ -980,7 +988,7 @@ mod tests {
                 ast_c::UnaryOperator::Complement,
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                    ast_c::InnerTypedExpression::constant(2),
                 )),
             ),
         );
@@ -990,14 +998,14 @@ mod tests {
 
         assert_eq!(
             emit_expression(&exp, &mut instructions, &mut id_gen, &mut symbol_table),
-            Val::Var("tmp.0".into())
+            Val::var("tmp.0")
         );
         assert_eq!(
             instructions,
             vec![Instruction::Unary {
                 op: UnaryOperator::Complement,
-                src: Val::Constant(ast_c::Const::ConstInt(2)),
-                dst: Val::Var("tmp.0".into()),
+                src: Val::constant(2),
+                dst: Val::var("tmp.0"),
             },]
         );
     }
@@ -1018,9 +1026,7 @@ mod tests {
                                 ast_c::UnaryOperator::Negate,
                                 Box::new(ast_c::TypedExpression(
                                     ast_c::Type::Int,
-                                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(
-                                        8,
-                                    )),
+                                    ast_c::InnerTypedExpression::constant(8),
                                 )),
                             ),
                         )),
@@ -1034,25 +1040,25 @@ mod tests {
 
         assert_eq!(
             emit_expression(&exp, &mut instructions, &mut id_gen, &mut symbol_table),
-            Val::Var("tmp.2".into())
+            Val::var("tmp.2")
         );
         assert_eq!(
             instructions,
             vec![
                 Instruction::Unary {
                     op: UnaryOperator::Negate,
-                    src: Val::Constant(ast_c::Const::ConstInt(8)),
-                    dst: Val::Var("tmp.0".into()),
+                    src: Val::constant(8),
+                    dst: Val::var("tmp.0"),
                 },
                 Instruction::Unary {
                     op: UnaryOperator::Complement,
-                    src: Val::Var("tmp.0".into()),
-                    dst: Val::Var("tmp.1".into()),
+                    src: Val::var("tmp.0"),
+                    dst: Val::var("tmp.1"),
                 },
                 Instruction::Unary {
                     op: UnaryOperator::Negate,
-                    src: Val::Var("tmp.1".into()),
-                    dst: Val::Var("tmp.2".into()),
+                    src: Val::var("tmp.1"),
+                    dst: Val::var("tmp.2"),
                 },
             ]
         );
@@ -1060,18 +1066,11 @@ mod tests {
 
     #[test]
     fn test_emit_statement_return_constant() {
-        let (ins, instructions) =
-            do_emit_statement(&ast_c::TypedStatement::Return(ast_c::TypedExpression(
-                ast_c::Type::Int,
-                ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
-            )));
+        let (ins, instructions) = do_emit_statement(&ast_c::TypedStatement::Return(
+            ast_c::TypedExpression(ast_c::Type::Int, ast_c::InnerTypedExpression::constant(2)),
+        ));
 
-        assert_eq!(
-            ins,
-            Some(Instruction::Return(Val::Constant(ast_c::Const::ConstInt(
-                2
-            ))))
-        );
+        assert_eq!(ins, Some(Instruction::Return(Val::constant(2))));
         assert!(instructions.is_empty());
     }
 
@@ -1084,18 +1083,18 @@ mod tests {
                     ast_c::UnaryOperator::Negate,
                     Box::new(ast_c::TypedExpression(
                         ast_c::Type::Int,
-                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        ast_c::InnerTypedExpression::constant(2),
                     )),
                 ),
             )));
 
-        assert_eq!(ins, Some(Instruction::Return(Val::Var("tmp.0".into()))));
+        assert_eq!(ins, Some(Instruction::Return(Val::var("tmp.0"))));
         assert_eq!(
             instructions,
             vec![Instruction::Unary {
                 op: UnaryOperator::Negate,
-                src: Val::Constant(ast_c::Const::ConstInt(2)),
-                dst: Val::Var("tmp.0".into()),
+                src: Val::constant(2),
+                dst: Val::var("tmp.0"),
             }]
         );
     }
@@ -1109,11 +1108,11 @@ mod tests {
                     ast_c::BinaryOperator::Add,
                     Box::new(ast_c::TypedExpression(
                         ast_c::Type::Int,
-                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                        ast_c::InnerTypedExpression::constant(1),
                     )),
                     Box::new(ast_c::TypedExpression(
                         ast_c::Type::Int,
-                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        ast_c::InnerTypedExpression::constant(2),
                     )),
                 ),
             )));
@@ -1126,9 +1125,9 @@ mod tests {
             instructions,
             vec![Instruction::Binary {
                 op: BinaryOperator::Add,
-                src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                dst: Val::Var("tmp.0".into()),
+                src1: Val::constant(1),
+                src2: Val::constant(2),
+                dst: Val::var("tmp.0"),
             }]
         );
     }
@@ -1148,9 +1147,7 @@ mod tests {
                                 ast_c::UnaryOperator::Complement,
                                 Box::new(ast_c::Expression::Unary(
                                     ast_c::UnaryOperator::Negate,
-                                    Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(
-                                        8,
-                                    ))),
+                                    Box::new(ast_c::Expression::constant(8)),
                                 )),
                             )),
                         ),
@@ -1175,22 +1172,22 @@ mod tests {
                     body: vec![
                         Instruction::Unary {
                             op: UnaryOperator::Negate,
-                            src: Val::Constant(ast_c::Const::ConstInt(8)),
-                            dst: Val::Var("tmp.0".into()),
+                            src: Val::constant(8),
+                            dst: Val::var("tmp.0"),
                         },
                         Instruction::Unary {
                             op: UnaryOperator::Complement,
-                            src: Val::Var("tmp.0".into()),
-                            dst: Val::Var("tmp.1".into()),
+                            src: Val::var("tmp.0"),
+                            dst: Val::var("tmp.1"),
                         },
                         Instruction::Unary {
                             op: UnaryOperator::Negate,
-                            src: Val::Var("tmp.1".into()),
-                            dst: Val::Var("tmp.2".into()),
+                            src: Val::var("tmp.1"),
+                            dst: Val::var("tmp.2"),
                         },
-                        Instruction::Return(Val::Var("tmp.2".into())),
+                        Instruction::Return(Val::var("tmp.2")),
                         // Default Return(0)
-                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
+                        Instruction::Return(Val::constant(0)),
                     ]
                 })]
             }
@@ -1210,20 +1207,16 @@ mod tests {
                             ast_c::BinaryOperator::Subtract,
                             Box::new(ast_c::Expression::Binary(
                                 ast_c::BinaryOperator::Multiply,
-                                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
-                                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(2))),
+                                Box::new(ast_c::Expression::constant(1)),
+                                Box::new(ast_c::Expression::constant(2)),
                             )),
                             Box::new(ast_c::Expression::Binary(
                                 ast_c::BinaryOperator::Multiply,
-                                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(3))),
+                                Box::new(ast_c::Expression::constant(3)),
                                 Box::new(ast_c::Expression::Binary(
                                     ast_c::BinaryOperator::Add,
-                                    Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(
-                                        4,
-                                    ))),
-                                    Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(
-                                        5,
-                                    ))),
+                                    Box::new(ast_c::Expression::constant(4)),
+                                    Box::new(ast_c::Expression::constant(5)),
                                 )),
                             )),
                         ),
@@ -1248,31 +1241,31 @@ mod tests {
                     body: vec![
                         Instruction::Binary {
                             op: BinaryOperator::Multiply,
-                            src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                            src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                            dst: Val::Var("tmp.0".into()),
+                            src1: Val::constant(1),
+                            src2: Val::constant(2),
+                            dst: Val::var("tmp.0"),
                         },
                         Instruction::Binary {
                             op: BinaryOperator::Add,
-                            src1: Val::Constant(ast_c::Const::ConstInt(4)),
-                            src2: Val::Constant(ast_c::Const::ConstInt(5)),
-                            dst: Val::Var("tmp.1".into()),
+                            src1: Val::constant(4),
+                            src2: Val::constant(5),
+                            dst: Val::var("tmp.1"),
                         },
                         Instruction::Binary {
                             op: BinaryOperator::Multiply,
-                            src1: Val::Constant(ast_c::Const::ConstInt(3)),
-                            src2: Val::Var("tmp.1".into()),
-                            dst: Val::Var("tmp.2".into()),
+                            src1: Val::constant(3),
+                            src2: Val::var("tmp.1"),
+                            dst: Val::var("tmp.2"),
                         },
                         Instruction::Binary {
                             op: BinaryOperator::Subtract,
-                            src1: Val::Var("tmp.0".into()),
-                            src2: Val::Var("tmp.2".into()),
-                            dst: Val::Var("tmp.3".into()),
+                            src1: Val::var("tmp.0"),
+                            src2: Val::var("tmp.2"),
+                            dst: Val::var("tmp.3"),
                         },
-                        Instruction::Return(Val::Var("tmp.3".into())),
+                        Instruction::Return(Val::var("tmp.3")),
                         // Default Return(0)
-                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
+                        Instruction::Return(Val::constant(0)),
                     ],
                 })]
             }
@@ -1303,18 +1296,18 @@ mod tests {
                 ast_c::UnaryOperator::Not,
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                    ast_c::InnerTypedExpression::constant(1),
                 )),
             ),
         ));
 
-        assert_eq!(val, Val::Var("tmp.0".into()));
+        assert_eq!(val, Val::var("tmp.0"));
         assert_eq!(
             instructions,
             vec![Instruction::Unary {
                 op: UnaryOperator::Not,
-                src: Val::Constant(ast_c::Const::ConstInt(1)),
-                dst: Val::Var("tmp.0".into()),
+                src: Val::constant(1),
+                dst: Val::var("tmp.0"),
             },]
         );
     }
@@ -1343,50 +1336,50 @@ mod tests {
                         ast_c::BinaryOperator::Add,
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                            ast_c::InnerTypedExpression::constant(1),
                         )),
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                            ast_c::InnerTypedExpression::constant(2),
                         )),
                     ),
                 )),
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                    ast_c::InnerTypedExpression::constant(3),
                 )),
             ),
         ));
 
-        assert_eq!(val, Val::Var("tmp.2".into()));
+        assert_eq!(val, Val::var("tmp.2"));
         assert_eq!(
             instructions,
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                    dst: Val::Var("tmp.1".into()), // v1
+                    src1: Val::constant(1),
+                    src2: Val::constant(2),
+                    dst: Val::var("tmp.1"), // v1
                 },
                 Instruction::JumpIfZero {
-                    condition: Val::Var("tmp.1".into()),
+                    condition: Val::var("tmp.1"),
                     target: "and_false.0".into(),
                 },
                 Instruction::JumpIfZero {
-                    condition: Val::Constant(ast_c::Const::ConstInt(3)), // v2
+                    condition: Val::constant(3), // v2
                     target: "and_false.0".into(),
                 },
                 Instruction::Copy {
-                    src: Val::Constant(ast_c::Const::ConstInt(1)),
-                    dst: Val::Var("tmp.2".into()), // result
+                    src: Val::constant(1),
+                    dst: Val::var("tmp.2"), // result
                 },
                 Instruction::Jump {
                     target: "and_end.0".into(),
                 },
                 Instruction::Label("and_false.0".into()),
                 Instruction::Copy {
-                    src: Val::Constant(ast_c::Const::ConstInt(0)),
-                    dst: Val::Var("tmp.2".into()), // result
+                    src: Val::constant(0),
+                    dst: Val::var("tmp.2"), // result
                 },
                 Instruction::Label("and_end.0".into()),
             ]
@@ -1417,50 +1410,50 @@ mod tests {
                         ast_c::BinaryOperator::Add,
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                            ast_c::InnerTypedExpression::constant(1),
                         )),
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                            ast_c::InnerTypedExpression::constant(2),
                         )),
                     ),
                 )),
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                    ast_c::InnerTypedExpression::constant(3),
                 )),
             ),
         ));
 
-        assert_eq!(val, Val::Var("tmp.2".into()));
+        assert_eq!(val, Val::var("tmp.2"));
         assert_eq!(
             instructions,
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                    dst: Val::Var("tmp.1".into()), // v1
+                    src1: Val::constant(1),
+                    src2: Val::constant(2),
+                    dst: Val::var("tmp.1"), // v1
                 },
                 Instruction::JumpIfNotZero {
-                    condition: Val::Var("tmp.1".into()),
+                    condition: Val::var("tmp.1"),
                     target: "or_true.0".into(),
                 },
                 Instruction::JumpIfNotZero {
-                    condition: Val::Constant(ast_c::Const::ConstInt(3)), // v2
+                    condition: Val::constant(3), // v2
                     target: "or_true.0".into(),
                 },
                 Instruction::Copy {
-                    src: Val::Constant(ast_c::Const::ConstInt(0)),
-                    dst: Val::Var("tmp.2".into()), // result
+                    src: Val::constant(0),
+                    dst: Val::var("tmp.2"), // result
                 },
                 Instruction::Jump {
                     target: "or_end.0".into(),
                 },
                 Instruction::Label("or_true.0".into()),
                 Instruction::Copy {
-                    src: Val::Constant(ast_c::Const::ConstInt(1)),
-                    dst: Val::Var("tmp.2".into()), // result
+                    src: Val::constant(1),
+                    dst: Val::var("tmp.2"), // result
                 },
                 Instruction::Label("or_end.0".into()),
             ]
@@ -1478,7 +1471,7 @@ mod tests {
                 ast_c::BinaryOperator::Or,
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                    ast_c::InnerTypedExpression::constant(1),
                 )),
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
@@ -1486,63 +1479,63 @@ mod tests {
                         ast_c::BinaryOperator::And,
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                            ast_c::InnerTypedExpression::constant(2),
                         )),
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                            ast_c::InnerTypedExpression::constant(3),
                         )),
                     ),
                 )),
             ),
         ));
 
-        assert_eq!(val, Val::Var("tmp.3".into()));
+        assert_eq!(val, Val::var("tmp.3"));
         assert_eq!(
             instructions,
             vec![
                 Instruction::JumpIfNotZero {
-                    condition: Val::Constant(ast_c::Const::ConstInt(1)), // OR v1
+                    condition: Val::constant(1), // OR v1
                     target: "or_true.0".into(),
                 },
                 // AND
                 Instruction::JumpIfZero {
-                    condition: Val::Constant(ast_c::Const::ConstInt(2)), // AND v1
+                    condition: Val::constant(2), // AND v1
                     target: "and_false.1".into(),
                 },
                 Instruction::JumpIfZero {
-                    condition: Val::Constant(ast_c::Const::ConstInt(3)), // AND v2
+                    condition: Val::constant(3), // AND v2
                     target: "and_false.1".into(),
                 },
                 Instruction::Copy {
-                    src: Val::Constant(ast_c::Const::ConstInt(1)),
-                    dst: Val::Var("tmp.2".into()), // AND result
+                    src: Val::constant(1),
+                    dst: Val::var("tmp.2"), // AND result
                 },
                 Instruction::Jump {
                     target: "and_end.1".into(),
                 },
                 Instruction::Label("and_false.1".into()),
                 Instruction::Copy {
-                    src: Val::Constant(ast_c::Const::ConstInt(0)),
-                    dst: Val::Var("tmp.2".into()), // AND result
+                    src: Val::constant(0),
+                    dst: Val::var("tmp.2"), // AND result
                 },
                 Instruction::Label("and_end.1".into()),
                 // back to OR
                 Instruction::JumpIfNotZero {
-                    condition: Val::Var("tmp.2".into()), // OR v2
+                    condition: Val::var("tmp.2"), // OR v2
                     target: "or_true.0".into(),
                 },
                 Instruction::Copy {
-                    src: Val::Constant(ast_c::Const::ConstInt(0)),
-                    dst: Val::Var("tmp.3".into()), // final result
+                    src: Val::constant(0),
+                    dst: Val::var("tmp.3"), // final result
                 },
                 Instruction::Jump {
                     target: "or_end.0".into(),
                 },
                 Instruction::Label("or_true.0".into()),
                 Instruction::Copy {
-                    src: Val::Constant(ast_c::Const::ConstInt(1)),
-                    dst: Val::Var("tmp.3".into()), // final result
+                    src: Val::constant(1),
+                    dst: Val::var("tmp.3"), // final result
                 },
                 Instruction::Label("or_end.0".into()),
             ]
@@ -1561,36 +1554,36 @@ mod tests {
                         ast_c::BinaryOperator::Add,
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                            ast_c::InnerTypedExpression::constant(1),
                         )),
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                            ast_c::InnerTypedExpression::constant(2),
                         )),
                     ),
                 )),
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                    ast_c::InnerTypedExpression::constant(3),
                 )),
             ),
         ));
 
-        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(val, Val::var("tmp.1"));
         assert_eq!(
             instructions,
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                    dst: Val::Var("tmp.0".into()),
+                    src1: Val::constant(1),
+                    src2: Val::constant(2),
+                    dst: Val::var("tmp.0"),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::Equal,
-                    src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
-                    dst: Val::Var("tmp.1".into()),
+                    src1: Val::var("tmp.0"),
+                    src2: Val::constant(3),
+                    dst: Val::var("tmp.1"),
                 },
             ]
         );
@@ -1608,36 +1601,36 @@ mod tests {
                         ast_c::BinaryOperator::Add,
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                            ast_c::InnerTypedExpression::constant(1),
                         )),
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                            ast_c::InnerTypedExpression::constant(2),
                         )),
                     ),
                 )),
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                    ast_c::InnerTypedExpression::constant(3),
                 )),
             ),
         ));
 
-        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(val, Val::var("tmp.1"));
         assert_eq!(
             instructions,
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                    dst: Val::Var("tmp.0".into()),
+                    src1: Val::constant(1),
+                    src2: Val::constant(2),
+                    dst: Val::var("tmp.0"),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::NotEqual,
-                    src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
-                    dst: Val::Var("tmp.1".into()),
+                    src1: Val::var("tmp.0"),
+                    src2: Val::constant(3),
+                    dst: Val::var("tmp.1"),
                 },
             ]
         );
@@ -1655,36 +1648,36 @@ mod tests {
                         ast_c::BinaryOperator::Add,
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                            ast_c::InnerTypedExpression::constant(1),
                         )),
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                            ast_c::InnerTypedExpression::constant(2),
                         )),
                     ),
                 )),
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                    ast_c::InnerTypedExpression::constant(3),
                 )),
             ),
         ));
 
-        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(val, Val::var("tmp.1"));
         assert_eq!(
             instructions,
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                    dst: Val::Var("tmp.0".into()),
+                    src1: Val::constant(1),
+                    src2: Val::constant(2),
+                    dst: Val::var("tmp.0"),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::LessThan,
-                    src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
-                    dst: Val::Var("tmp.1".into()),
+                    src1: Val::var("tmp.0"),
+                    src2: Val::constant(3),
+                    dst: Val::var("tmp.1"),
                 },
             ]
         );
@@ -1702,36 +1695,36 @@ mod tests {
                         ast_c::BinaryOperator::Add,
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                            ast_c::InnerTypedExpression::constant(1),
                         )),
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                            ast_c::InnerTypedExpression::constant(2),
                         )),
                     ),
                 )),
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                    ast_c::InnerTypedExpression::constant(3),
                 )),
             ),
         ));
 
-        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(val, Val::var("tmp.1"));
         assert_eq!(
             instructions,
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                    dst: Val::Var("tmp.0".into()),
+                    src1: Val::constant(1),
+                    src2: Val::constant(2),
+                    dst: Val::var("tmp.0"),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::GreaterThan,
-                    src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
-                    dst: Val::Var("tmp.1".into()),
+                    src1: Val::var("tmp.0"),
+                    src2: Val::constant(3),
+                    dst: Val::var("tmp.1"),
                 },
             ]
         );
@@ -1749,36 +1742,36 @@ mod tests {
                         ast_c::BinaryOperator::Add,
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                            ast_c::InnerTypedExpression::constant(1),
                         )),
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                            ast_c::InnerTypedExpression::constant(2),
                         )),
                     ),
                 )),
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                    ast_c::InnerTypedExpression::constant(3),
                 )),
             ),
         ));
 
-        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(val, Val::var("tmp.1"));
         assert_eq!(
             instructions,
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                    dst: Val::Var("tmp.0".into()),
+                    src1: Val::constant(1),
+                    src2: Val::constant(2),
+                    dst: Val::var("tmp.0"),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::LessOrEqual,
-                    src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
-                    dst: Val::Var("tmp.1".into()),
+                    src1: Val::var("tmp.0"),
+                    src2: Val::constant(3),
+                    dst: Val::var("tmp.1"),
                 },
             ]
         );
@@ -1796,36 +1789,36 @@ mod tests {
                         ast_c::BinaryOperator::Add,
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                            ast_c::InnerTypedExpression::constant(1),
                         )),
                         Box::new(ast_c::TypedExpression(
                             ast_c::Type::Int,
-                            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                            ast_c::InnerTypedExpression::constant(2),
                         )),
                     ),
                 )),
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                    ast_c::InnerTypedExpression::constant(3),
                 )),
             ),
         ));
 
-        assert_eq!(val, Val::Var("tmp.1".into()));
+        assert_eq!(val, Val::var("tmp.1"));
         assert_eq!(
             instructions,
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                    dst: Val::Var("tmp.0".into()),
+                    src1: Val::constant(1),
+                    src2: Val::constant(2),
+                    dst: Val::var("tmp.0"),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::GreaterOrEqual,
-                    src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
-                    dst: Val::Var("tmp.1".into()),
+                    src1: Val::var("tmp.0"),
+                    src2: Val::constant(3),
+                    dst: Val::var("tmp.1"),
                 },
             ]
         );
@@ -1859,8 +1852,8 @@ mod tests {
                             name: "a.99".into(),
                             init: Some(ast_c::Expression::Binary(
                                 ast_c::BinaryOperator::Add,
-                                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(10))),
-                                Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(1))),
+                                Box::new(ast_c::Expression::constant(10)),
+                                Box::new(ast_c::Expression::constant(1)),
                             )),
                             var_type: ast_c::Type::Int,
                             storage_class: None,
@@ -1868,26 +1861,24 @@ mod tests {
                         // b = a * 2;
                         ast_c::BlockItem::S(ast_c::Statement::Expression(
                             ast_c::Expression::Assignment(
-                                Box::new(ast_c::Expression::Var("b.98".into())),
+                                Box::new(ast_c::Expression::var("b.98")),
                                 Box::new(ast_c::Expression::Binary(
                                     ast_c::BinaryOperator::Multiply,
-                                    Box::new(ast_c::Expression::Var("a.99".into())),
-                                    Box::new(ast_c::Expression::Constant(ast_c::Const::ConstInt(
-                                        2,
-                                    ))),
+                                    Box::new(ast_c::Expression::var("a.99")),
+                                    Box::new(ast_c::Expression::constant(2)),
                                 )),
                             ),
                         )),
                         // int c = 42;
                         ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
                             name: "c.100".into(),
-                            init: Some(ast_c::Expression::Constant(ast_c::Const::ConstInt(42))),
+                            init: Some(ast_c::Expression::constant(42)),
                             var_type: ast_c::Type::Int,
                             storage_class: None,
                         })),
                         // return b;
-                        ast_c::BlockItem::S(ast_c::Statement::Return(ast_c::Expression::Var(
-                            "b.98".into(),
+                        ast_c::BlockItem::S(ast_c::Statement::Return(ast_c::Expression::var(
+                            "b.98",
                         ))),
                     ],
                 }),
@@ -1922,34 +1913,34 @@ mod tests {
                         // int a = 10 + 1;
                         Instruction::Binary {
                             op: BinaryOperator::Add,
-                            src1: Val::Constant(ast_c::Const::ConstInt(10)),
-                            src2: Val::Constant(ast_c::Const::ConstInt(1)),
-                            dst: Val::Var("tmp.0".into()),
+                            src1: Val::constant(10),
+                            src2: Val::constant(1),
+                            dst: Val::var("tmp.0"),
                         },
                         Instruction::Copy {
-                            src: Val::Var("tmp.0".into()),
-                            dst: Val::Var("a.99".into()),
+                            src: Val::var("tmp.0"),
+                            dst: Val::var("a.99"),
                         },
                         // b = a * 2;
                         Instruction::Binary {
                             op: BinaryOperator::Multiply,
-                            src1: Val::Var("a.99".into()),
-                            src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                            dst: Val::Var("tmp.1".into()),
+                            src1: Val::var("a.99"),
+                            src2: Val::constant(2),
+                            dst: Val::var("tmp.1"),
                         },
                         Instruction::Copy {
-                            src: Val::Var("tmp.1".into()),
-                            dst: Val::Var("b.98".into()),
+                            src: Val::var("tmp.1"),
+                            dst: Val::var("b.98"),
                         },
                         // int c = 42;
                         Instruction::Copy {
-                            src: Val::Constant(ast_c::Const::ConstInt(42)),
-                            dst: Val::Var("c.100".into()),
+                            src: Val::constant(42),
+                            dst: Val::var("c.100"),
                         },
                         // return b;
-                        Instruction::Return(Val::Var("b.98".into())),
+                        Instruction::Return(Val::var("b.98")),
                         // Default Return(0)
-                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
+                        Instruction::Return(Val::constant(0)),
                     ],
                 })]
             }
@@ -1968,17 +1959,17 @@ mod tests {
                     ast_c::BinaryOperator::Add,
                     Box::new(ast_c::TypedExpression(
                         ast_c::Type::Int,
-                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                        ast_c::InnerTypedExpression::constant(1),
                     )),
                     Box::new(ast_c::TypedExpression(
                         ast_c::Type::Int,
-                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        ast_c::InnerTypedExpression::constant(2),
                     )),
                 ),
             ),
             then_block: Box::new(ast_c::TypedStatement::Return(ast_c::TypedExpression(
                 ast_c::Type::Int,
-                ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                ast_c::InnerTypedExpression::constant(1),
             ))),
             else_block: None,
         });
@@ -1997,16 +1988,16 @@ mod tests {
                 // c = <result of condition>
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                    dst: Val::Var("tmp.1".into()), // c
+                    src1: Val::constant(1),
+                    src2: Val::constant(2),
+                    dst: Val::var("tmp.1"), // c
                 },
                 Instruction::JumpIfZero {
-                    condition: Val::Var("tmp.1".into()),
+                    condition: Val::var("tmp.1"),
                     target: "if_end.0".into(),
                 },
                 // instructions for statement
-                Instruction::Return(Val::Constant(ast_c::Const::ConstInt(1))),
+                Instruction::Return(Val::constant(1)),
                 // Label(end)
                 Instruction::Label("if_end.0".into()),
             ]
@@ -2027,23 +2018,20 @@ mod tests {
                     ast_c::BinaryOperator::Add,
                     Box::new(ast_c::TypedExpression(
                         ast_c::Type::Int,
-                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                        ast_c::InnerTypedExpression::constant(1),
                     )),
                     Box::new(ast_c::TypedExpression(
                         ast_c::Type::Int,
-                        ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                        ast_c::InnerTypedExpression::constant(2),
                     )),
                 ),
             ),
             then_block: Box::new(ast_c::TypedStatement::Return(ast_c::TypedExpression(
                 ast_c::Type::Int,
-                ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                ast_c::InnerTypedExpression::constant(1),
             ))),
             else_block: Some(Box::new(ast_c::TypedStatement::Return(
-                ast_c::TypedExpression(
-                    ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
-                ),
+                ast_c::TypedExpression(ast_c::Type::Int, ast_c::InnerTypedExpression::constant(2)),
             ))),
         });
 
@@ -2064,23 +2052,23 @@ mod tests {
                 // c = <result of condition>
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
-                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
-                    dst: Val::Var("tmp.1".into()), // c
+                    src1: Val::constant(1),
+                    src2: Val::constant(2),
+                    dst: Val::var("tmp.1"), // c
                 },
                 Instruction::JumpIfZero {
-                    condition: Val::Var("tmp.1".into()),
+                    condition: Val::var("tmp.1"),
                     target: "if_else.0".into(),
                 },
                 // instructions for then-statement
-                Instruction::Return(Val::Constant(ast_c::Const::ConstInt(1))),
+                Instruction::Return(Val::constant(1)),
                 Instruction::Jump {
                     target: "if_end.0".into(),
                 },
                 // Label(else)
                 Instruction::Label("if_else.0".into()),
                 // instructions for else-statement
-                Instruction::Return(Val::Constant(ast_c::Const::ConstInt(2))),
+                Instruction::Return(Val::constant(2)),
                 // Label(end)
                 Instruction::Label("if_end.0".into()),
             ]
@@ -2096,15 +2084,15 @@ mod tests {
             ast_c::InnerTypedExpression::Conditional(
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(1)),
+                    ast_c::InnerTypedExpression::constant(1),
                 )),
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
+                    ast_c::InnerTypedExpression::constant(2),
                 )),
                 Box::new(ast_c::TypedExpression(
                     ast_c::Type::Int,
-                    ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(3)),
+                    ast_c::InnerTypedExpression::constant(3),
                 )),
             ),
         ));
@@ -2122,30 +2110,30 @@ mod tests {
         //   v2 = <result of e2>
         //   result = v2
         //   Label(end)
-        assert_eq!(val, Val::Var("tmp.4".into())); // result
+        assert_eq!(val, Val::var("tmp.4")); // result
         assert_eq!(
             instructions,
             vec![
                 // <instructions for condition>
                 // c = <result of condition>
                 Instruction::Copy {
-                    src: Val::Constant(ast_c::Const::ConstInt(1)),
-                    dst: Val::Var("tmp.1".into()), // c
+                    src: Val::constant(1),
+                    dst: Val::var("tmp.1"), // c
                 },
                 Instruction::JumpIfZero {
-                    condition: Val::Var("tmp.1".into()),
+                    condition: Val::var("tmp.1"),
                     target: "cond_e2.0".into(),
                 },
                 // instructions for e1-expression
                 // v1 = <result of e1>
                 Instruction::Copy {
-                    src: Val::Constant(ast_c::Const::ConstInt(2)),
-                    dst: Val::Var("tmp.2".into()), // v1
+                    src: Val::constant(2),
+                    dst: Val::var("tmp.2"), // v1
                 },
                 // result = v1
                 Instruction::Copy {
-                    src: Val::Var("tmp.2".into()),
-                    dst: Val::Var("tmp.4".into()), // result
+                    src: Val::var("tmp.2"),
+                    dst: Val::var("tmp.4"), // result
                 },
                 Instruction::Jump {
                     target: "cond_end.0".into(),
@@ -2155,13 +2143,13 @@ mod tests {
                 // instructions for e2-expression
                 // v2 = <result of e2>
                 Instruction::Copy {
-                    src: Val::Constant(ast_c::Const::ConstInt(3)),
-                    dst: Val::Var("tmp.3".into()), // v2
+                    src: Val::constant(3),
+                    dst: Val::var("tmp.3"), // v2
                 },
                 // result = v2
                 Instruction::Copy {
-                    src: Val::Var("tmp.3".into()),
-                    dst: Val::Var("tmp.4".into()), // result
+                    src: Val::var("tmp.3"),
+                    dst: Val::var("tmp.4"), // result
                 },
                 // Label(end)
                 Instruction::Label("cond_end.0".into()),
@@ -2187,19 +2175,19 @@ mod tests {
                         ast_c::BlockItem::S(ast_c::Statement::Labeled {
                             label: "label0".into(),
                             statement: Box::new(ast_c::Statement::Return(
-                                ast_c::Expression::Constant(ast_c::Const::ConstInt(0)),
+                                ast_c::Expression::constant(0),
                             )),
                         }),
                         ast_c::BlockItem::S(ast_c::Statement::Labeled {
                             label: "label1".into(),
                             statement: Box::new(ast_c::Statement::Return(
-                                ast_c::Expression::Constant(ast_c::Const::ConstInt(1)),
+                                ast_c::Expression::constant(1),
                             )),
                         }),
                         ast_c::BlockItem::S(ast_c::Statement::Labeled {
                             label: "label2".into(),
                             statement: Box::new(ast_c::Statement::Return(
-                                ast_c::Expression::Constant(ast_c::Const::ConstInt(2)),
+                                ast_c::Expression::constant(2),
                             )),
                         }),
                     ],
@@ -2233,13 +2221,13 @@ mod tests {
                             target: "label1".into(),
                         },
                         Instruction::Label("label0".into()),
-                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
+                        Instruction::Return(Val::constant(0)),
                         Instruction::Label("label1".into()),
-                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(1))),
+                        Instruction::Return(Val::constant(1)),
                         Instruction::Label("label2".into()),
-                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(2))),
+                        Instruction::Return(Val::constant(2)),
                         // Default Return(0)
-                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
+                        Instruction::Return(Val::constant(0)),
                     ],
                 })]
             }
@@ -2266,8 +2254,8 @@ mod tests {
                         items: vec![ast_c::BlockItem::S(ast_c::Statement::Return(
                             ast_c::Expression::Binary(
                                 ast_c::BinaryOperator::Add,
-                                Box::new(ast_c::Expression::Var("a".into())),
-                                Box::new(ast_c::Expression::Var("b".into())),
+                                Box::new(ast_c::Expression::var("a")),
+                                Box::new(ast_c::Expression::var("b")),
                             ),
                         ))],
                     }),
@@ -2295,8 +2283,8 @@ mod tests {
                             ast_c::Expression::FunctionCall(
                                 "foo".into(),
                                 vec![
-                                    ast_c::Expression::Constant(ast_c::Const::ConstInt(42)),
-                                    ast_c::Expression::Constant(ast_c::Const::ConstInt(77)),
+                                    ast_c::Expression::constant(42),
+                                    ast_c::Expression::constant(77),
                                 ],
                             ),
                         ))],
@@ -2310,7 +2298,7 @@ mod tests {
             ],
         };
         let (typed_program, mut symbol_table) = type_checking(&program).unwrap();
-        dbg!(&typed_program);
+        //dbg!(&typed_program);
 
         assert_eq!(
             emit_program(&typed_program, &mut symbol_table).unwrap(),
@@ -2323,13 +2311,13 @@ mod tests {
                         body: vec![
                             Instruction::Binary {
                                 op: BinaryOperator::Add,
-                                src1: Val::Var("a".into()),
-                                src2: Val::Var("b".into()),
-                                dst: Val::Var("tmp.0".into()),
+                                src1: Val::var("a"),
+                                src2: Val::var("b"),
+                                dst: Val::var("tmp.0"),
                             },
-                            Instruction::Return(Val::Var("tmp.0".into())),
+                            Instruction::Return(Val::var("tmp.0")),
                             // Default Return(0)
-                            Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
+                            Instruction::Return(Val::constant(0)),
                         ],
                     }),
                     TopLevel::Function(Function {
@@ -2339,15 +2327,12 @@ mod tests {
                         body: vec![
                             Instruction::FunCall {
                                 name: "foo".into(),
-                                args: vec![
-                                    Val::Constant(ast_c::Const::ConstInt(42)),
-                                    Val::Constant(ast_c::Const::ConstInt(77)),
-                                ],
-                                dst: Val::Var("tmp.1".into()),
+                                args: vec![Val::constant(42), Val::constant(77),],
+                                dst: Val::var("tmp.1"),
                             },
-                            Instruction::Return(Val::Var("tmp.1".into())),
+                            Instruction::Return(Val::var("tmp.1")),
                             // Default Return(0)
-                            Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
+                            Instruction::Return(Val::constant(0)),
                         ],
                     })
                 ]
@@ -2376,13 +2361,13 @@ mod tests {
                 }),
                 ast_c::Declaration::VarDecl(ast_c::VarDecl {
                     name: "b".into(),
-                    init: Some(ast_c::Expression::Constant(ast_c::Const::ConstInt(42))),
+                    init: Some(ast_c::Expression::constant(42)),
                     var_type: ast_c::Type::Int,
                     storage_class: Some(ast_c::StorageClass::Static),
                 }),
                 ast_c::Declaration::VarDecl(ast_c::VarDecl {
                     name: "c".into(),
-                    init: Some(ast_c::Expression::Constant(ast_c::Const::ConstInt(0))),
+                    init: Some(ast_c::Expression::constant(0)),
                     var_type: ast_c::Type::Int,
                     storage_class: Some(ast_c::StorageClass::Extern),
                 }),
@@ -2393,7 +2378,7 @@ mod tests {
                         items: vec![
                             ast_c::BlockItem::D(ast_c::Declaration::VarDecl(ast_c::VarDecl {
                                 name: "d".into(),
-                                init: Some(ast_c::Expression::Constant(ast_c::Const::ConstInt(77))),
+                                init: Some(ast_c::Expression::constant(77)),
                                 var_type: ast_c::Type::Int,
                                 storage_class: Some(ast_c::StorageClass::Static),
                             })),
@@ -2404,7 +2389,7 @@ mod tests {
                                 storage_class: Some(ast_c::StorageClass::Extern),
                             })),
                             ast_c::BlockItem::S(ast_c::Statement::Return(
-                                ast_c::Expression::Constant(ast_c::Const::ConstInt(0)),
+                                ast_c::Expression::constant(0),
                             )),
                         ],
                     }),
@@ -2428,9 +2413,9 @@ mod tests {
                         global: true,
                         params: vec![],
                         body: vec![
-                            Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
+                            Instruction::Return(Val::constant(0)),
                             // Default Return(0)
-                            Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
+                            Instruction::Return(Val::constant(0)),
                         ],
                     }),
                     // a is extern
