@@ -709,6 +709,15 @@ pub(crate) enum StaticInit {
     LongInit(i64),
 }
 
+impl From<StaticInit> for i64 {
+    fn from(value: StaticInit) -> Self {
+        match value {
+            StaticInit::IntInit(i) => i as i64,
+            StaticInit::LongInit(i) => i,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct SymbolTableEntry {
     pub(crate) type_: Type,

@@ -52,13 +52,16 @@ fn pass1(program: &tacky::Program) -> asm::Program {
             tacky::TopLevel::Function(function) => {
                 top_level.push(asm::TopLevel::Function(function_definition(function)));
             }
-            tacky::TopLevel::StaticVariable { name, global, init } => {
-                top_level.push(asm::TopLevel::StaticVariable {
-                    name: name.into(),
-                    global: *global,
-                    init: *init,
-                })
-            }
+            tacky::TopLevel::StaticVariable {
+                name,
+                global,
+                t,
+                init,
+            } => top_level.push(asm::TopLevel::StaticVariable {
+                name: name.into(),
+                global: *global,
+                init: init.clone(),
+            }),
         }
     }
     asm::Program { top_level }
@@ -67,7 +70,7 @@ fn pass1(program: &tacky::Program) -> asm::Program {
 impl From<&tacky::Val> for asm::Operand {
     fn from(val: &tacky::Val) -> Self {
         match val {
-            tacky::Val::Constant(c) => asm::Operand::Imm(*c),
+            tacky::Val::Constant(c) => asm::Operand::Imm(c.into()),
             tacky::Val::Var(identifier) => {
                 asm::Operand::Pseudo(asm::Identifier(identifier.0.clone()))
             }
@@ -653,6 +656,7 @@ fn pass3(ast: &asm::Program) -> Result<asm::Program, CodegenError> {
 mod tests {
     use super::*;
     use crate::ast_asm::ABI_PARAM_SIZE;
+    use crate::ast_c::Const;
     use crate::tacky::{BinaryOperator, Identifier, Instruction, UnaryOperator, Val};
 
     #[test]
@@ -661,7 +665,7 @@ mod tests {
         gen_instruction(
             &Instruction::Unary {
                 op: UnaryOperator::Not,
-                src: Val::Constant(2),
+                src: Val::Constant(Const::ConstInt(2)),
                 dst: Val::Var("tmp.0".into()),
             },
             &mut instructions,
@@ -694,7 +698,7 @@ mod tests {
         gen_instruction(
             &Instruction::Binary {
                 op: BinaryOperator::LessOrEqual,
-                src1: Val::Constant(2),
+                src1: Val::Constant(Const::ConstInt(2)),
                 src2: Val::Var(tmp0.clone()),
                 dst: Val::Var(tmp1.clone()),
             },
@@ -830,7 +834,7 @@ mod tests {
                 name: "main".into(),
                 global: true,
                 params: vec![],
-                body: vec![Instruction::Return(Val::Constant(2))],
+                body: vec![Instruction::Return(Val::Constant(Const::ConstInt(2)))],
             })],
         };
 
@@ -865,7 +869,7 @@ mod tests {
                 body: vec![
                     Instruction::Unary {
                         op: UnaryOperator::Negate,
-                        src: Val::Constant(2),
+                        src: Val::Constant(Const::ConstInt(2)),
                         dst: Val::Var("tmp.0".into()),
                     },
                     Instruction::Return(Val::Var("tmp.0".into())),
@@ -911,8 +915,8 @@ mod tests {
                 params: vec![],
                 body: vec![Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(2),
-                    src2: Val::Constant(3),
+                    src1: Val::Constant(Const::ConstInt(2)),
+                    src2: Val::Constant(Const::ConstInt(3)),
                     dst: Val::Var("tmp.0".into()),
                 }],
             })],
@@ -952,8 +956,8 @@ mod tests {
                 params: vec![],
                 body: vec![Instruction::Binary {
                     op: BinaryOperator::Remainder,
-                    src1: Val::Constant(2),
-                    src2: Val::Constant(3),
+                    src1: Val::Constant(Const::ConstInt(2)),
+                    src2: Val::Constant(Const::ConstInt(3)),
                     dst: Val::Var("tmp.0".into()),
                 }],
             })],
@@ -994,8 +998,8 @@ mod tests {
                 params: vec![],
                 body: vec![Instruction::Binary {
                     op: BinaryOperator::BitXor,
-                    src1: Val::Constant(2),
-                    src2: Val::Constant(3),
+                    src1: Val::Constant(Const::ConstInt(2)),
+                    src2: Val::Constant(Const::ConstInt(3)),
                     dst: Val::Var("tmp.0".into()),
                 }],
             })],
@@ -1707,7 +1711,7 @@ mod tests {
                     "g".into(),
                     "h".into(),
                 ],
-                body: vec![Instruction::Return(Val::Constant(0))],
+                body: vec![Instruction::Return(Val::Constant(Const::ConstInt(0)))],
             })],
         };
 

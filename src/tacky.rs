@@ -28,6 +28,7 @@ use crate::id_gen::IdGenerator;
 use crate::semantics::{IdentifierAttrs, InitialValue, StaticInit, SymbolTable};
 use thiserror::Error;
 
+// TODO: maybe this should be the same as lexer::Identifier?
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
 pub(crate) struct Identifier(pub(crate) String);
 
@@ -51,7 +52,8 @@ pub(crate) enum TopLevel {
     StaticVariable {
         name: Identifier,
         global: bool,
-        init: i64,
+        t: ast_c::Type,
+        init: StaticInit,
     },
 }
 
@@ -66,6 +68,14 @@ pub(crate) struct Function {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Instruction {
     Return(Val),
+    SignExtend {
+        src: Val,
+        dst: Val,
+    },
+    Truncate {
+        src: Val,
+        dst: Val,
+    },
     Unary {
         op: UnaryOperator,
         src: Val,
@@ -102,7 +112,7 @@ pub(crate) enum Instruction {
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Val {
-    Constant(i64),
+    Constant(ast_c::Const),
     Var(Identifier),
 }
 
@@ -143,7 +153,7 @@ pub struct TackyError {
 
 pub(crate) fn emit_program(
     program: &ast_c::TypedProgram,
-    symbol_table: &SymbolTable,
+    symbol_table: &mut SymbolTable,
 ) -> Result<Program, TackyError> {
     let mut id_gen = IdGenerator::new();
     let mut top_level = vec![];
@@ -174,22 +184,29 @@ fn convert_symbols_to_tacky(symbol_table: &SymbolTable) -> Result<Vec<TopLevel>,
     for (name, entry) in symbol_table.iter_sorted() {
         if let IdentifierAttrs::Static { init, global } = &entry.attrs {
             match init {
-                InitialValue::Initial(i) => {
-                    let i = match i {
-                        StaticInit::IntInit(i) => i64::from(*i),
-                        StaticInit::LongInit(i) => *i,
+                InitialValue::Initial(init) => tacky_defs.push(TopLevel::StaticVariable {
+                    name: name.into(),
+                    global: *global,
+                    t: entry.type_.clone(),
+                    init: init.clone(),
+                }),
+                InitialValue::Tentative => {
+                    let init = match entry.type_ {
+                        ast_c::Type::Int => StaticInit::IntInit(0),
+                        ast_c::Type::Long => StaticInit::LongInit(0),
+                        _ => {
+                            return Err(TackyError {
+                                message: "Unsupported type for tentative definition".into(),
+                            });
+                        }
                     };
                     tacky_defs.push(TopLevel::StaticVariable {
                         name: name.into(),
                         global: *global,
-                        init: i,
+                        t: entry.type_.clone(),
+                        init,
                     })
                 }
-                InitialValue::Tentative => tacky_defs.push(TopLevel::StaticVariable {
-                    name: name.into(),
-                    global: *global,
-                    init: 0,
-                }),
                 InitialValue::NoInitialiser => (),
             }
         }
@@ -201,7 +218,7 @@ fn convert_symbols_to_tacky(symbol_table: &SymbolTable) -> Result<Vec<TopLevel>,
 fn emit_function_definition(
     function_decl: &ast_c::TypedFunDecl,
     id_gen: &mut IdGenerator,
-    symbol_table: &SymbolTable,
+    symbol_table: &mut SymbolTable,
 ) -> Option<Function> {
     // Drop function declarations without a body
     let body = match &function_decl.body {
@@ -225,7 +242,9 @@ fn emit_function_definition(
     assert!(val.is_none(), "emit_block should return None");
 
     // Add a Return(0) to the end of all functions (see page 112)
-    instructions.push(Instruction::Return(Val::Constant(0)));
+    instructions.push(Instruction::Return(Val::Constant(ast_c::Const::ConstInt(
+        0,
+    ))));
 
     let global = symbol_table.expect_fun_global(&function_decl.name);
 
@@ -237,8 +256,30 @@ fn emit_function_definition(
     })
 }
 
-fn next_var(id_gen: &mut IdGenerator) -> Identifier {
+fn make_temporary(id_gen: &mut IdGenerator) -> Identifier {
     format!("tmp.{}", id_gen.next()).into()
+}
+
+fn make_label(prefix: &str, id_gen: &mut IdGenerator) -> Identifier {
+    format!("{prefix}.{}", id_gen.next()).into()
+}
+
+fn make_two_labels(prefixes: &[&str], id_gen: &mut IdGenerator) -> (Identifier, Identifier) {
+    let id = id_gen.next();
+    (
+        format!("{}.{}", prefixes[0], id).into(),
+        format!("{}.{}", prefixes[1], id).into(),
+    )
+}
+
+fn make_tacky_variable(
+    t: &ast_c::Type,
+    id_gen: &mut IdGenerator,
+    symbol_table: &mut SymbolTable,
+) -> Val {
+    let var_name = make_temporary(id_gen);
+    symbol_table.add(var_name.0.clone(), t.clone(), IdentifierAttrs::Local);
+    Val::Var(var_name)
 }
 
 // Previously called "emit_tacky"
@@ -246,25 +287,38 @@ fn emit_expression(
     exp: &ast_c::TypedExpression,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
+    symbol_table: &mut SymbolTable,
 ) -> Val {
     match exp {
-        ast_c::TypedExpression(
-            t,
-            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(c)),
-        ) => Val::Constant(i64::from(*c)),
-        ast_c::TypedExpression(
-            t,
-            ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstLong(_)),
-        ) => {
-            todo!()
+        ast_c::TypedExpression(_, ast_c::InnerTypedExpression::Constant(c)) => {
+            Val::Constant(c.clone())
         }
         ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Var(identifier)) => {
             Val::Var(identifier.into())
         }
-        ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Cast(_, _)) => todo!(),
+        ast_c::TypedExpression(_, ast_c::InnerTypedExpression::Cast(t, inner)) => {
+            let result = emit_expression(inner, instructions, id_gen, symbol_table);
+            if t == inner.get_type() {
+                // No cast needed
+                return result;
+            }
+            let dst = make_tacky_variable(t, id_gen, symbol_table);
+            if *t == ast_c::Type::Long {
+                instructions.push(Instruction::SignExtend {
+                    src: result,
+                    dst: dst.clone(),
+                })
+            } else {
+                instructions.push(Instruction::Truncate {
+                    src: result,
+                    dst: dst.clone(),
+                })
+            }
+            dst
+        }
         ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Unary(op, inner)) => {
-            let src = emit_expression(inner, instructions, id_gen);
-            let dst = Val::Var(next_var(id_gen));
+            let src = emit_expression(inner, instructions, id_gen, symbol_table);
+            let dst = make_tacky_variable(t, id_gen, symbol_table);
             let tacky_op = convert_unop(op);
             instructions.push(Instruction::Unary {
                 op: tacky_op,
@@ -279,23 +333,21 @@ fn emit_expression(
             t,
             ast_c::InnerTypedExpression::Binary(ast_c::BinaryOperator::And, e1, e2),
         ) => {
-            let id = id_gen.next();
-            let label_false: Identifier = format!("and_false.{id}").into();
-            let label_end: Identifier = format!("and_end.{id}").into();
+            let (label_false, label_end) = make_two_labels(&["and_false", "and_end"], id_gen);
 
-            let v1 = emit_expression(e1, instructions, id_gen);
+            let v1 = emit_expression(e1, instructions, id_gen, symbol_table);
             instructions.push(Instruction::JumpIfZero {
                 condition: v1.clone(),
                 target: label_false.clone(),
             });
-            let v2 = emit_expression(e2, instructions, id_gen);
+            let v2 = emit_expression(e2, instructions, id_gen, symbol_table);
             instructions.push(Instruction::JumpIfZero {
                 condition: v2.clone(),
                 target: label_false.clone(),
             });
-            let dst = Val::Var(next_var(id_gen));
+            let dst = make_tacky_variable(t, id_gen, symbol_table);
             instructions.push(Instruction::Copy {
-                src: Val::Constant(1),
+                src: Val::Constant(ast_c::Const::ConstInt(1)),
                 dst: dst.clone(),
             });
             instructions.push(Instruction::Jump {
@@ -303,7 +355,7 @@ fn emit_expression(
             });
             instructions.push(Instruction::Label(label_false));
             instructions.push(Instruction::Copy {
-                src: Val::Constant(0),
+                src: Val::Constant(ast_c::Const::ConstInt(0)),
                 dst: dst.clone(),
             });
             instructions.push(Instruction::Label(label_end));
@@ -314,23 +366,21 @@ fn emit_expression(
             t,
             ast_c::InnerTypedExpression::Binary(ast_c::BinaryOperator::Or, e1, e2),
         ) => {
-            let id = id_gen.next();
-            let label_true: Identifier = format!("or_true.{id}").into();
-            let label_end: Identifier = format!("or_end.{id}").into();
+            let (label_true, label_end) = make_two_labels(&["or_true", "or_end"], id_gen);
 
-            let v1 = emit_expression(e1, instructions, id_gen);
+            let v1 = emit_expression(e1, instructions, id_gen, symbol_table);
             instructions.push(Instruction::JumpIfNotZero {
                 condition: v1.clone(),
                 target: label_true.clone(),
             });
-            let v2 = emit_expression(e2, instructions, id_gen);
+            let v2 = emit_expression(e2, instructions, id_gen, symbol_table);
             instructions.push(Instruction::JumpIfNotZero {
                 condition: v2.clone(),
                 target: label_true.clone(),
             });
-            let dst = Val::Var(next_var(id_gen));
+            let dst = make_tacky_variable(t, id_gen, symbol_table);
             instructions.push(Instruction::Copy {
-                src: Val::Constant(0),
+                src: Val::Constant(ast_c::Const::ConstInt(0)),
                 dst: dst.clone(),
             });
             instructions.push(Instruction::Jump {
@@ -338,7 +388,7 @@ fn emit_expression(
             });
             instructions.push(Instruction::Label(label_true));
             instructions.push(Instruction::Copy {
-                src: Val::Constant(1),
+                src: Val::Constant(ast_c::Const::ConstInt(1)),
                 dst: dst.clone(),
             });
             instructions.push(Instruction::Label(label_end));
@@ -347,9 +397,9 @@ fn emit_expression(
 
         ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Binary(op, e1, e2)) => {
             // Unsequenced - indeterminate order of evaluation
-            let src1 = emit_expression(e1, instructions, id_gen);
-            let src2 = emit_expression(e2, instructions, id_gen);
-            let dst = Val::Var(next_var(id_gen));
+            let src1 = emit_expression(e1, instructions, id_gen, symbol_table);
+            let src2 = emit_expression(e2, instructions, id_gen, symbol_table);
+            let dst = make_tacky_variable(t, id_gen, symbol_table);
             let tacky = convert_binop(op);
             instructions.push(Instruction::Binary {
                 op: tacky,
@@ -362,7 +412,7 @@ fn emit_expression(
 
         ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Assignment(lhs, rhs)) => {
             if let ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Var(v)) = &**lhs {
-                let result = emit_expression(rhs, instructions, id_gen);
+                let result = emit_expression(rhs, instructions, id_gen, symbol_table);
                 instructions.push(Instruction::Copy {
                     src: result,
                     dst: Val::Var(v.into()),
@@ -374,14 +424,14 @@ fn emit_expression(
         }
 
         ast_c::TypedExpression(t, ast_c::InnerTypedExpression::Conditional(cond, e1, e2)) => {
-            emit_exp_conditional(cond, e1, e2, instructions, id_gen)
+            emit_exp_conditional(cond, e1, e2, instructions, id_gen, symbol_table)
         }
 
         ast_c::TypedExpression(t, ast_c::InnerTypedExpression::FunctionCall(name, args)) => {
-            let dst = Val::Var(next_var(id_gen));
+            let dst = make_tacky_variable(t, id_gen, symbol_table);
             let tacky_args: Vec<Val> = args
                 .iter()
-                .map(|arg| emit_expression(arg, instructions, id_gen))
+                .map(|arg| emit_expression(arg, instructions, id_gen, symbol_table))
                 .collect();
             instructions.push(Instruction::FunCall {
                 name: name.clone().into(),
@@ -429,7 +479,7 @@ fn emit_block(
     block: &ast_c::TypedBlock,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
-    symbol_table: &SymbolTable,
+    symbol_table: &mut SymbolTable,
 ) -> Option<Instruction> {
     for item in &block.items {
         emit_block_item(item, instructions, id_gen, symbol_table);
@@ -441,7 +491,7 @@ fn emit_block_item(
     item: &ast_c::TypedBlockItem,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
-    symbol_table: &SymbolTable,
+    symbol_table: &mut SymbolTable,
 ) -> Option<Instruction> {
     match item {
         ast_c::TypedBlockItem::S(statement) => {
@@ -461,7 +511,7 @@ fn emit_declaration(
     decl: &ast_c::TypedDeclaration,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
-    symbol_table: &SymbolTable,
+    symbol_table: &mut SymbolTable,
 ) -> Option<Instruction> {
     match decl {
         ast_c::TypedDeclaration::FunDecl(decl) => {
@@ -469,7 +519,7 @@ fn emit_declaration(
             assert_eq!(def, None, "Function declaration should not have a body");
         }
         ast_c::TypedDeclaration::VarDecl(decl) => {
-            emit_variable_declaration(decl, instructions, id_gen);
+            emit_variable_declaration(decl, instructions, id_gen, symbol_table);
         }
     }
     None
@@ -484,6 +534,7 @@ fn emit_variable_declaration(
     }: &ast_c::TypedVarDecl,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
+    symbol_table: &mut SymbolTable,
 ) -> Option<Instruction> {
     // Do not emit for variables with static or extern storage class
     if storage_class.is_some() {
@@ -491,7 +542,7 @@ fn emit_variable_declaration(
     }
 
     if let Some(init) = &init {
-        let result = emit_expression(init, instructions, id_gen);
+        let result = emit_expression(init, instructions, id_gen, symbol_table);
         instructions.push(Instruction::Copy {
             src: result,
             dst: Val::Var(name.clone().into()),
@@ -504,15 +555,15 @@ fn emit_statement(
     statement: &ast_c::TypedStatement,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
-    symbol_table: &SymbolTable,
+    symbol_table: &mut SymbolTable,
 ) -> Option<Instruction> {
     match statement {
         ast_c::TypedStatement::Return(exp) => {
-            let val = emit_expression(exp, instructions, id_gen);
+            let val = emit_expression(exp, instructions, id_gen, symbol_table);
             Some(Instruction::Return(val))
         }
         ast_c::TypedStatement::Expression(exp) => {
-            let _ = emit_expression(exp, instructions, id_gen);
+            let _ = emit_expression(exp, instructions, id_gen, symbol_table);
             // No need to return anything for an expression statement
             None
         }
@@ -596,7 +647,7 @@ fn emit_statement_if(
     else_: &Option<Box<ast_c::TypedStatement>>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
-    symbol_table: &SymbolTable,
+    symbol_table: &mut SymbolTable,
 ) -> Option<Instruction> {
     // if (condition) { then }:
     //   <instructions for condition>
@@ -615,11 +666,10 @@ fn emit_statement_if(
     //   <instructions for else-statement>
     //   Label(end)
 
-    let label_else: Identifier = format!("if_else.{}", id_gen.next()).into();
-    let label_end: Identifier = format!("if_end.{}", id_gen.next()).into();
+    let (label_else, label_end) = make_two_labels(&["if_else", "if_end"], id_gen);
 
     // if:
-    let cond_val = emit_expression(condition, instructions, id_gen);
+    let cond_val = emit_expression(condition, instructions, id_gen, symbol_table);
 
     instructions.push(Instruction::JumpIfZero {
         condition: cond_val.clone(),
@@ -661,6 +711,7 @@ fn emit_exp_conditional(
     e2: &ast_c::TypedExpression,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
+    symbol_table: &mut SymbolTable,
 ) -> Val {
     // <instructions for condition>
     // c = <result of condition>
@@ -675,17 +726,17 @@ fn emit_exp_conditional(
     // result = v2
     // Label(end)
 
-    let label_e2: Identifier = format!("cond_e2.{}", id_gen.next()).into();
-    let label_end: Identifier = format!("cond_end.{}", id_gen.next()).into();
+    let (label_e2, label_end) = make_two_labels(&["cond_e2", "cond_end"], id_gen);
+    let t = condition.get_type();
 
-    let c = Val::Var(next_var(id_gen));
-    let v1 = Val::Var(next_var(id_gen));
-    let v2 = Val::Var(next_var(id_gen));
-    let result = Val::Var(next_var(id_gen));
+    let c = make_tacky_variable(t, id_gen, symbol_table);
+    let v1 = make_tacky_variable(t, id_gen, symbol_table);
+    let v2 = make_tacky_variable(t, id_gen, symbol_table);
+    let result = make_tacky_variable(t, id_gen, symbol_table);
 
     // <instructions for condition>
     // c = <result of condition>
-    let c_val = emit_expression(condition, instructions, id_gen);
+    let c_val = emit_expression(condition, instructions, id_gen, symbol_table);
     instructions.push(Instruction::Copy {
         src: c_val,
         dst: c.clone(),
@@ -698,7 +749,7 @@ fn emit_exp_conditional(
     });
 
     // e1:
-    let val_e1 = emit_expression(e1, instructions, id_gen);
+    let val_e1 = emit_expression(e1, instructions, id_gen, symbol_table);
 
     // v1 = <result of e1>
     instructions.push(Instruction::Copy {
@@ -721,7 +772,7 @@ fn emit_exp_conditional(
     instructions.push(Instruction::Label(label_e2));
 
     // <instructions to calculate e2>
-    let val_e2 = emit_expression(e2, instructions, id_gen);
+    let val_e2 = emit_expression(e2, instructions, id_gen, symbol_table);
 
     // v2 = <result of e2>
     instructions.push(Instruction::Copy {
@@ -765,7 +816,7 @@ fn emit_do_while(
     loop_label: &Option<crate::lexer::Identifier>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
-    symbol_table: &SymbolTable,
+    symbol_table: &mut SymbolTable,
 ) -> Option<Instruction> {
     let loop_label = loop_label
         .clone()
@@ -783,7 +834,7 @@ fn emit_do_while(
     instructions.push(Instruction::Label(continue_label(loop_label.clone())));
 
     // evaluate condition and compare to zero
-    let v = emit_expression(condition, instructions, id_gen);
+    let v = emit_expression(condition, instructions, id_gen, symbol_table);
 
     // conditionally jump to beginning of loop
     instructions.push(Instruction::JumpIfNotZero {
@@ -803,7 +854,7 @@ fn emit_while(
     loop_label: &Option<crate::lexer::Identifier>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
-    symbol_table: &SymbolTable,
+    symbol_table: &mut SymbolTable,
 ) -> Option<Instruction> {
     let loop_label = loop_label
         .clone()
@@ -814,7 +865,7 @@ fn emit_while(
     instructions.push(Instruction::Label(continue_label.clone()));
 
     // evaluate condition and compare to zero
-    let v = emit_expression(condition, instructions, id_gen);
+    let v = emit_expression(condition, instructions, id_gen, symbol_table);
 
     // conditionally jump to end of loop
     instructions.push(Instruction::JumpIfZero {
@@ -846,7 +897,7 @@ fn emit_for(
     loop_label: &Option<crate::lexer::Identifier>,
     instructions: &mut Vec<Instruction>,
     id_gen: &mut IdGenerator,
-    symbol_table: &SymbolTable,
+    symbol_table: &mut SymbolTable,
 ) -> Option<Instruction> {
     let loop_label = loop_label
         .clone()
@@ -857,20 +908,18 @@ fn emit_for(
 
     // Emit initialization
     if let ast_c::TypedForInit::InitExp(Some(exp)) = init {
-        let v = emit_expression(exp, instructions, id_gen);
-        instructions.push(Instruction::Copy {
-            src: v,
-            dst: Val::Var(next_var(id_gen)),
-        });
+        let v = emit_expression(exp, instructions, id_gen, symbol_table);
+        let dst = make_tacky_variable(exp.get_type(), id_gen, symbol_table);
+        instructions.push(Instruction::Copy { src: v, dst });
     } else if let ast_c::TypedForInit::InitDecl(decl) = init {
-        let _ = emit_variable_declaration(decl, instructions, id_gen);
+        let _ = emit_variable_declaration(decl, instructions, id_gen, symbol_table);
     }
 
     instructions.push(Instruction::Label(start_label.clone()));
 
     // Evaluate condition if present
     if let Some(cond) = condition {
-        let v = emit_expression(cond, instructions, id_gen);
+        let v = emit_expression(cond, instructions, id_gen, symbol_table);
         instructions.push(Instruction::JumpIfZero {
             condition: v,
             target: break_label.clone(),
@@ -887,11 +936,9 @@ fn emit_for(
 
     // Post-expression
     if let Some(post_exp) = post {
-        let v = emit_expression(post_exp, instructions, id_gen);
-        instructions.push(Instruction::Copy {
-            src: v,
-            dst: Val::Var(next_var(id_gen)),
-        });
+        let v = emit_expression(post_exp, instructions, id_gen, symbol_table);
+        let dst = make_tacky_variable(post_exp.get_type(), id_gen, symbol_table);
+        instructions.push(Instruction::Copy { src: v, dst });
     }
 
     // Jump to start label
@@ -916,10 +963,11 @@ mod tests {
         );
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
+        let mut symbol_table = SymbolTable::new();
 
         assert_eq!(
-            emit_expression(&exp, &mut instructions, &mut id_gen),
-            Val::Constant(2)
+            emit_expression(&exp, &mut instructions, &mut id_gen, &mut symbol_table),
+            Val::Constant(ast_c::Const::ConstInt(2))
         );
         assert!(instructions.is_empty());
     }
@@ -938,16 +986,17 @@ mod tests {
         );
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
+        let mut symbol_table = SymbolTable::new();
 
         assert_eq!(
-            emit_expression(&exp, &mut instructions, &mut id_gen),
+            emit_expression(&exp, &mut instructions, &mut id_gen, &mut symbol_table),
             Val::Var("tmp.0".into())
         );
         assert_eq!(
             instructions,
             vec![Instruction::Unary {
                 op: UnaryOperator::Complement,
-                src: Val::Constant(2),
+                src: Val::Constant(ast_c::Const::ConstInt(2)),
                 dst: Val::Var("tmp.0".into()),
             },]
         );
@@ -981,9 +1030,10 @@ mod tests {
         );
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
+        let mut symbol_table = SymbolTable::new();
 
         assert_eq!(
-            emit_expression(&exp, &mut instructions, &mut id_gen),
+            emit_expression(&exp, &mut instructions, &mut id_gen, &mut symbol_table),
             Val::Var("tmp.2".into())
         );
         assert_eq!(
@@ -991,7 +1041,7 @@ mod tests {
             vec![
                 Instruction::Unary {
                     op: UnaryOperator::Negate,
-                    src: Val::Constant(8),
+                    src: Val::Constant(ast_c::Const::ConstInt(8)),
                     dst: Val::Var("tmp.0".into()),
                 },
                 Instruction::Unary {
@@ -1016,7 +1066,12 @@ mod tests {
                 ast_c::InnerTypedExpression::Constant(ast_c::Const::ConstInt(2)),
             )));
 
-        assert_eq!(ins, Some(Instruction::Return(Val::Constant(2))));
+        assert_eq!(
+            ins,
+            Some(Instruction::Return(Val::Constant(ast_c::Const::ConstInt(
+                2
+            ))))
+        );
         assert!(instructions.is_empty());
     }
 
@@ -1039,7 +1094,7 @@ mod tests {
             instructions,
             vec![Instruction::Unary {
                 op: UnaryOperator::Negate,
-                src: Val::Constant(2),
+                src: Val::Constant(ast_c::Const::ConstInt(2)),
                 dst: Val::Var("tmp.0".into()),
             }]
         );
@@ -1071,8 +1126,8 @@ mod tests {
             instructions,
             vec![Instruction::Binary {
                 op: BinaryOperator::Add,
-                src1: Val::Constant(1),
-                src2: Val::Constant(2),
+                src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                src2: Val::Constant(ast_c::Const::ConstInt(2)),
                 dst: Val::Var("tmp.0".into()),
             }]
         );
@@ -1108,10 +1163,10 @@ mod tests {
                 storage_class: None,
             })],
         };
-        let (typed_program, symbol_table) = type_checking(&program).unwrap();
+        let (typed_program, mut symbol_table) = type_checking(&program).unwrap();
 
         assert_eq!(
-            emit_program(&typed_program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &mut symbol_table).unwrap(),
             Program {
                 top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
@@ -1120,7 +1175,7 @@ mod tests {
                     body: vec![
                         Instruction::Unary {
                             op: UnaryOperator::Negate,
-                            src: Val::Constant(8),
+                            src: Val::Constant(ast_c::Const::ConstInt(8)),
                             dst: Val::Var("tmp.0".into()),
                         },
                         Instruction::Unary {
@@ -1135,7 +1190,7 @@ mod tests {
                         },
                         Instruction::Return(Val::Var("tmp.2".into())),
                         // Default Return(0)
-                        Instruction::Return(Val::Constant(0)),
+                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
                     ]
                 })]
             }
@@ -1181,10 +1236,10 @@ mod tests {
                 storage_class: None,
             })],
         };
-        let (typed_program, symbol_table) = type_checking(&program).unwrap();
+        let (typed_program, mut symbol_table) = type_checking(&program).unwrap();
 
         assert_eq!(
-            emit_program(&typed_program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &mut symbol_table).unwrap(),
             Program {
                 top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
@@ -1193,19 +1248,19 @@ mod tests {
                     body: vec![
                         Instruction::Binary {
                             op: BinaryOperator::Multiply,
-                            src1: Val::Constant(1),
-                            src2: Val::Constant(2),
+                            src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                            src2: Val::Constant(ast_c::Const::ConstInt(2)),
                             dst: Val::Var("tmp.0".into()),
                         },
                         Instruction::Binary {
                             op: BinaryOperator::Add,
-                            src1: Val::Constant(4),
-                            src2: Val::Constant(5),
+                            src1: Val::Constant(ast_c::Const::ConstInt(4)),
+                            src2: Val::Constant(ast_c::Const::ConstInt(5)),
                             dst: Val::Var("tmp.1".into()),
                         },
                         Instruction::Binary {
                             op: BinaryOperator::Multiply,
-                            src1: Val::Constant(3),
+                            src1: Val::Constant(ast_c::Const::ConstInt(3)),
                             src2: Val::Var("tmp.1".into()),
                             dst: Val::Var("tmp.2".into()),
                         },
@@ -1217,7 +1272,7 @@ mod tests {
                         },
                         Instruction::Return(Val::Var("tmp.3".into())),
                         // Default Return(0)
-                        Instruction::Return(Val::Constant(0)),
+                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
                     ],
                 })]
             }
@@ -1227,15 +1282,16 @@ mod tests {
     fn do_emit_tacky(exp: &ast_c::TypedExpression) -> (Val, Vec<Instruction>) {
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
-        let val = emit_expression(exp, &mut instructions, &mut id_gen);
+        let mut symbol_table = SymbolTable::new();
+        let val = emit_expression(exp, &mut instructions, &mut id_gen, &mut symbol_table);
         (val, instructions)
     }
 
     fn do_emit_statement(stmt: &ast_c::TypedStatement) -> (Option<Instruction>, Vec<Instruction>) {
         let mut instructions = vec![];
         let mut id_gen = IdGenerator::new();
-        let symbol_table = SymbolTable::new();
-        let ins = emit_statement(stmt, &mut instructions, &mut id_gen, &symbol_table);
+        let mut symbol_table = SymbolTable::new();
+        let ins = emit_statement(stmt, &mut instructions, &mut id_gen, &mut symbol_table);
         (ins, instructions)
     }
 
@@ -1257,7 +1313,7 @@ mod tests {
             instructions,
             vec![Instruction::Unary {
                 op: UnaryOperator::Not,
-                src: Val::Constant(1),
+                src: Val::Constant(ast_c::Const::ConstInt(1)),
                 dst: Val::Var("tmp.0".into()),
             },]
         );
@@ -1308,8 +1364,8 @@ mod tests {
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(1),
-                    src2: Val::Constant(2),
+                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
                     dst: Val::Var("tmp.1".into()), // v1
                 },
                 Instruction::JumpIfZero {
@@ -1317,11 +1373,11 @@ mod tests {
                     target: "and_false.0".into(),
                 },
                 Instruction::JumpIfZero {
-                    condition: Val::Constant(3), // v2
+                    condition: Val::Constant(ast_c::Const::ConstInt(3)), // v2
                     target: "and_false.0".into(),
                 },
                 Instruction::Copy {
-                    src: Val::Constant(1),
+                    src: Val::Constant(ast_c::Const::ConstInt(1)),
                     dst: Val::Var("tmp.2".into()), // result
                 },
                 Instruction::Jump {
@@ -1329,7 +1385,7 @@ mod tests {
                 },
                 Instruction::Label("and_false.0".into()),
                 Instruction::Copy {
-                    src: Val::Constant(0),
+                    src: Val::Constant(ast_c::Const::ConstInt(0)),
                     dst: Val::Var("tmp.2".into()), // result
                 },
                 Instruction::Label("and_end.0".into()),
@@ -1382,8 +1438,8 @@ mod tests {
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(1),
-                    src2: Val::Constant(2),
+                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
                     dst: Val::Var("tmp.1".into()), // v1
                 },
                 Instruction::JumpIfNotZero {
@@ -1391,11 +1447,11 @@ mod tests {
                     target: "or_true.0".into(),
                 },
                 Instruction::JumpIfNotZero {
-                    condition: Val::Constant(3), // v2
+                    condition: Val::Constant(ast_c::Const::ConstInt(3)), // v2
                     target: "or_true.0".into(),
                 },
                 Instruction::Copy {
-                    src: Val::Constant(0),
+                    src: Val::Constant(ast_c::Const::ConstInt(0)),
                     dst: Val::Var("tmp.2".into()), // result
                 },
                 Instruction::Jump {
@@ -1403,7 +1459,7 @@ mod tests {
                 },
                 Instruction::Label("or_true.0".into()),
                 Instruction::Copy {
-                    src: Val::Constant(1),
+                    src: Val::Constant(ast_c::Const::ConstInt(1)),
                     dst: Val::Var("tmp.2".into()), // result
                 },
                 Instruction::Label("or_end.0".into()),
@@ -1446,20 +1502,20 @@ mod tests {
             instructions,
             vec![
                 Instruction::JumpIfNotZero {
-                    condition: Val::Constant(1), // OR v1
+                    condition: Val::Constant(ast_c::Const::ConstInt(1)), // OR v1
                     target: "or_true.0".into(),
                 },
                 // AND
                 Instruction::JumpIfZero {
-                    condition: Val::Constant(2), // AND v1
+                    condition: Val::Constant(ast_c::Const::ConstInt(2)), // AND v1
                     target: "and_false.1".into(),
                 },
                 Instruction::JumpIfZero {
-                    condition: Val::Constant(3), // AND v2
+                    condition: Val::Constant(ast_c::Const::ConstInt(3)), // AND v2
                     target: "and_false.1".into(),
                 },
                 Instruction::Copy {
-                    src: Val::Constant(1),
+                    src: Val::Constant(ast_c::Const::ConstInt(1)),
                     dst: Val::Var("tmp.2".into()), // AND result
                 },
                 Instruction::Jump {
@@ -1467,7 +1523,7 @@ mod tests {
                 },
                 Instruction::Label("and_false.1".into()),
                 Instruction::Copy {
-                    src: Val::Constant(0),
+                    src: Val::Constant(ast_c::Const::ConstInt(0)),
                     dst: Val::Var("tmp.2".into()), // AND result
                 },
                 Instruction::Label("and_end.1".into()),
@@ -1477,7 +1533,7 @@ mod tests {
                     target: "or_true.0".into(),
                 },
                 Instruction::Copy {
-                    src: Val::Constant(0),
+                    src: Val::Constant(ast_c::Const::ConstInt(0)),
                     dst: Val::Var("tmp.3".into()), // final result
                 },
                 Instruction::Jump {
@@ -1485,7 +1541,7 @@ mod tests {
                 },
                 Instruction::Label("or_true.0".into()),
                 Instruction::Copy {
-                    src: Val::Constant(1),
+                    src: Val::Constant(ast_c::Const::ConstInt(1)),
                     dst: Val::Var("tmp.3".into()), // final result
                 },
                 Instruction::Label("or_end.0".into()),
@@ -1526,14 +1582,14 @@ mod tests {
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(1),
-                    src2: Val::Constant(2),
+                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
                     dst: Val::Var("tmp.0".into()),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::Equal,
                     src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(3),
+                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
                     dst: Val::Var("tmp.1".into()),
                 },
             ]
@@ -1573,14 +1629,14 @@ mod tests {
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(1),
-                    src2: Val::Constant(2),
+                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
                     dst: Val::Var("tmp.0".into()),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::NotEqual,
                     src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(3),
+                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
                     dst: Val::Var("tmp.1".into()),
                 },
             ]
@@ -1620,14 +1676,14 @@ mod tests {
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(1),
-                    src2: Val::Constant(2),
+                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
                     dst: Val::Var("tmp.0".into()),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::LessThan,
                     src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(3),
+                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
                     dst: Val::Var("tmp.1".into()),
                 },
             ]
@@ -1667,14 +1723,14 @@ mod tests {
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(1),
-                    src2: Val::Constant(2),
+                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
                     dst: Val::Var("tmp.0".into()),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::GreaterThan,
                     src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(3),
+                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
                     dst: Val::Var("tmp.1".into()),
                 },
             ]
@@ -1714,14 +1770,14 @@ mod tests {
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(1),
-                    src2: Val::Constant(2),
+                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
                     dst: Val::Var("tmp.0".into()),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::LessOrEqual,
                     src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(3),
+                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
                     dst: Val::Var("tmp.1".into()),
                 },
             ]
@@ -1761,14 +1817,14 @@ mod tests {
             vec![
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(1),
-                    src2: Val::Constant(2),
+                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
                     dst: Val::Var("tmp.0".into()),
                 },
                 Instruction::Binary {
                     op: BinaryOperator::GreaterOrEqual,
                     src1: Val::Var("tmp.0".into()),
-                    src2: Val::Constant(3),
+                    src2: Val::Constant(ast_c::Const::ConstInt(3)),
                     dst: Val::Var("tmp.1".into()),
                 },
             ]
@@ -1842,7 +1898,7 @@ mod tests {
                 storage_class: None,
             })],
         };
-        let (typed_program, symbol_table) = type_checking(&program).unwrap();
+        let (typed_program, mut symbol_table) = type_checking(&program).unwrap();
 
         // Listing 5-14: Expected TACKY:
         //   tmp.2 = 10 + 1
@@ -1853,7 +1909,7 @@ mod tests {
         //   c.0 = tmp.4
         //   Return(b.0)
         assert_eq!(
-            emit_program(&typed_program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &mut symbol_table).unwrap(),
             Program {
                 top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
@@ -1866,8 +1922,8 @@ mod tests {
                         // int a = 10 + 1;
                         Instruction::Binary {
                             op: BinaryOperator::Add,
-                            src1: Val::Constant(10),
-                            src2: Val::Constant(1),
+                            src1: Val::Constant(ast_c::Const::ConstInt(10)),
+                            src2: Val::Constant(ast_c::Const::ConstInt(1)),
                             dst: Val::Var("tmp.0".into()),
                         },
                         Instruction::Copy {
@@ -1878,7 +1934,7 @@ mod tests {
                         Instruction::Binary {
                             op: BinaryOperator::Multiply,
                             src1: Val::Var("a.99".into()),
-                            src2: Val::Constant(2),
+                            src2: Val::Constant(ast_c::Const::ConstInt(2)),
                             dst: Val::Var("tmp.1".into()),
                         },
                         Instruction::Copy {
@@ -1887,13 +1943,13 @@ mod tests {
                         },
                         // int c = 42;
                         Instruction::Copy {
-                            src: Val::Constant(42),
+                            src: Val::Constant(ast_c::Const::ConstInt(42)),
                             dst: Val::Var("c.100".into()),
                         },
                         // return b;
                         Instruction::Return(Val::Var("b.98".into())),
                         // Default Return(0)
-                        Instruction::Return(Val::Constant(0)),
+                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
                     ],
                 })]
             }
@@ -1941,18 +1997,18 @@ mod tests {
                 // c = <result of condition>
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(1),
-                    src2: Val::Constant(2),
-                    dst: Val::Var("tmp.2".into()), // c
+                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
+                    dst: Val::Var("tmp.1".into()), // c
                 },
                 Instruction::JumpIfZero {
-                    condition: Val::Var("tmp.2".into()),
-                    target: "if_end.1".into(),
+                    condition: Val::Var("tmp.1".into()),
+                    target: "if_end.0".into(),
                 },
                 // instructions for statement
-                Instruction::Return(Val::Constant(1)),
+                Instruction::Return(Val::Constant(ast_c::Const::ConstInt(1))),
                 // Label(end)
-                Instruction::Label("if_end.1".into()),
+                Instruction::Label("if_end.0".into()),
             ]
         );
     }
@@ -2008,25 +2064,25 @@ mod tests {
                 // c = <result of condition>
                 Instruction::Binary {
                     op: BinaryOperator::Add,
-                    src1: Val::Constant(1),
-                    src2: Val::Constant(2),
-                    dst: Val::Var("tmp.2".into()), // c
+                    src1: Val::Constant(ast_c::Const::ConstInt(1)),
+                    src2: Val::Constant(ast_c::Const::ConstInt(2)),
+                    dst: Val::Var("tmp.1".into()), // c
                 },
                 Instruction::JumpIfZero {
-                    condition: Val::Var("tmp.2".into()),
+                    condition: Val::Var("tmp.1".into()),
                     target: "if_else.0".into(),
                 },
                 // instructions for then-statement
-                Instruction::Return(Val::Constant(1)),
+                Instruction::Return(Val::Constant(ast_c::Const::ConstInt(1))),
                 Instruction::Jump {
-                    target: "if_end.1".into(),
+                    target: "if_end.0".into(),
                 },
                 // Label(else)
                 Instruction::Label("if_else.0".into()),
                 // instructions for else-statement
-                Instruction::Return(Val::Constant(2)),
+                Instruction::Return(Val::Constant(ast_c::Const::ConstInt(2))),
                 // Label(end)
-                Instruction::Label("if_end.1".into()),
+                Instruction::Label("if_end.0".into()),
             ]
         );
     }
@@ -2066,49 +2122,49 @@ mod tests {
         //   v2 = <result of e2>
         //   result = v2
         //   Label(end)
-        assert_eq!(val, Val::Var("tmp.5".into())); // result
+        assert_eq!(val, Val::Var("tmp.4".into())); // result
         assert_eq!(
             instructions,
             vec![
                 // <instructions for condition>
                 // c = <result of condition>
                 Instruction::Copy {
-                    src: Val::Constant(1),
-                    dst: Val::Var("tmp.2".into()), // c
+                    src: Val::Constant(ast_c::Const::ConstInt(1)),
+                    dst: Val::Var("tmp.1".into()), // c
                 },
                 Instruction::JumpIfZero {
-                    condition: Val::Var("tmp.2".into()),
+                    condition: Val::Var("tmp.1".into()),
                     target: "cond_e2.0".into(),
                 },
                 // instructions for e1-expression
                 // v1 = <result of e1>
                 Instruction::Copy {
-                    src: Val::Constant(2),
-                    dst: Val::Var("tmp.3".into()), // v1
+                    src: Val::Constant(ast_c::Const::ConstInt(2)),
+                    dst: Val::Var("tmp.2".into()), // v1
                 },
                 // result = v1
                 Instruction::Copy {
-                    src: Val::Var("tmp.3".into()),
-                    dst: Val::Var("tmp.5".into()), // result
+                    src: Val::Var("tmp.2".into()),
+                    dst: Val::Var("tmp.4".into()), // result
                 },
                 Instruction::Jump {
-                    target: "cond_end.1".into(),
+                    target: "cond_end.0".into(),
                 },
                 // Label(e2)
                 Instruction::Label("cond_e2.0".into()),
                 // instructions for e2-expression
                 // v2 = <result of e2>
                 Instruction::Copy {
-                    src: Val::Constant(3),
-                    dst: Val::Var("tmp.4".into()), // v2
+                    src: Val::Constant(ast_c::Const::ConstInt(3)),
+                    dst: Val::Var("tmp.3".into()), // v2
                 },
                 // result = v2
                 Instruction::Copy {
-                    src: Val::Var("tmp.4".into()),
-                    dst: Val::Var("tmp.5".into()), // result
+                    src: Val::Var("tmp.3".into()),
+                    dst: Val::Var("tmp.4".into()), // result
                 },
                 // Label(end)
-                Instruction::Label("cond_end.1".into()),
+                Instruction::Label("cond_end.0".into()),
             ]
         );
     }
@@ -2155,7 +2211,7 @@ mod tests {
                 storage_class: None,
             })],
         };
-        let (typed_program, symbol_table) = type_checking(&program).unwrap();
+        let (typed_program, mut symbol_table) = type_checking(&program).unwrap();
 
         // Listing 5-14: Expected TACKY:
         //   Jump(label1)
@@ -2166,7 +2222,7 @@ mod tests {
         //   .label2
         //     Return(2)
         assert_eq!(
-            emit_program(&typed_program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &mut symbol_table).unwrap(),
             Program {
                 top_level: vec![TopLevel::Function(Function {
                     name: "main".into(),
@@ -2177,13 +2233,13 @@ mod tests {
                             target: "label1".into(),
                         },
                         Instruction::Label("label0".into()),
-                        Instruction::Return(Val::Constant(0)),
+                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
                         Instruction::Label("label1".into()),
-                        Instruction::Return(Val::Constant(1)),
+                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(1))),
                         Instruction::Label("label2".into()),
-                        Instruction::Return(Val::Constant(2)),
+                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(2))),
                         // Default Return(0)
-                        Instruction::Return(Val::Constant(0)),
+                        Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
                     ],
                 })]
             }
@@ -2253,10 +2309,11 @@ mod tests {
                 }),
             ],
         };
-        let (typed_program, symbol_table) = type_checking(&program).unwrap();
+        let (typed_program, mut symbol_table) = type_checking(&program).unwrap();
+        dbg!(&typed_program);
 
         assert_eq!(
-            emit_program(&typed_program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &mut symbol_table).unwrap(),
             Program {
                 top_level: vec![
                     TopLevel::Function(Function {
@@ -2272,7 +2329,7 @@ mod tests {
                             },
                             Instruction::Return(Val::Var("tmp.0".into())),
                             // Default Return(0)
-                            Instruction::Return(Val::Constant(0)),
+                            Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
                         ],
                     }),
                     TopLevel::Function(Function {
@@ -2282,12 +2339,15 @@ mod tests {
                         body: vec![
                             Instruction::FunCall {
                                 name: "foo".into(),
-                                args: vec![Val::Constant(42), Val::Constant(77),],
+                                args: vec![
+                                    Val::Constant(ast_c::Const::ConstInt(42)),
+                                    Val::Constant(ast_c::Const::ConstInt(77)),
+                                ],
                                 dst: Val::Var("tmp.1".into()),
                             },
                             Instruction::Return(Val::Var("tmp.1".into())),
                             // Default Return(0)
-                            Instruction::Return(Val::Constant(0)),
+                            Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
                         ],
                     })
                 ]
@@ -2356,11 +2416,11 @@ mod tests {
                 }),
             ],
         };
-        let (typed_program, symbol_table) = type_checking(&program).unwrap();
+        let (typed_program, mut symbol_table) = type_checking(&program).unwrap();
 
         // Expected TACKY:
         assert_eq!(
-            emit_program(&typed_program, &symbol_table).unwrap(),
+            emit_program(&typed_program, &mut symbol_table).unwrap(),
             Program {
                 top_level: vec![
                     TopLevel::Function(Function {
@@ -2368,26 +2428,29 @@ mod tests {
                         global: true,
                         params: vec![],
                         body: vec![
-                            Instruction::Return(Val::Constant(0)),
+                            Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
                             // Default Return(0)
-                            Instruction::Return(Val::Constant(0)),
+                            Instruction::Return(Val::Constant(ast_c::Const::ConstInt(0))),
                         ],
                     }),
                     // a is extern
                     TopLevel::StaticVariable {
                         name: "b".into(),
                         global: false, // static, so not globally visible
-                        init: 42,
+                        t: ast_c::Type::Int,
+                        init: StaticInit::IntInit(42),
                     },
                     TopLevel::StaticVariable {
                         name: "c".into(),
                         global: true,
-                        init: 0, // tentative, set to zero
+                        t: ast_c::Type::Int,
+                        init: StaticInit::IntInit(0), // tentative, set to zero
                     },
                     TopLevel::StaticVariable {
                         name: "d".into(),
                         global: false,
-                        init: 77,
+                        t: ast_c::Type::Int,
+                        init: StaticInit::IntInit(77),
                     },
                     // e is extern
                 ]

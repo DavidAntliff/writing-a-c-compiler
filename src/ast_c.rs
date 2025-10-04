@@ -166,6 +166,12 @@ mod ast_base {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct TypedExpression(pub(crate) Type, pub(crate) InnerTypedExpression);
 
+impl TypedExpression {
+    pub(crate) fn get_type(&self) -> &Type {
+        &self.0
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum InnerTypedExpression {
     Constant(Const),
@@ -247,4 +253,13 @@ pub(crate) enum BinaryOperator {
 pub(crate) enum Const {
     ConstInt(i32),
     ConstLong(i64),
+}
+
+impl From<&Const> for i64 {
+    fn from(c: &Const) -> Self {
+        match c {
+            Const::ConstInt(i) => *i as i64,
+            Const::ConstLong(i) => *i,
+        }
+    }
 }

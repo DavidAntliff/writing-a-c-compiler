@@ -12,6 +12,7 @@ pub(crate) enum Constant {
     Long(i64),
 }
 
+// TODO: maybe this should be the same as tacky::Identifier?
 pub(crate) type Identifier = String;
 
 #[derive(Debug, PartialEq, Error)]

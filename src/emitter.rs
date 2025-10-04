@@ -91,7 +91,7 @@ pub(crate) fn write_out<W: Write>(
                 write_out_function(function, &symbol_table, writer)?;
             }
             TopLevel::StaticVariable { name, global, init } => {
-                write_out_static_variable(name, global, init, writer)?;
+                write_out_static_variable(name, global, init.into(), writer)?;
             }
         }
     }

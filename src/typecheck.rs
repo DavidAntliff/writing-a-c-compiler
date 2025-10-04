@@ -175,6 +175,7 @@ fn typecheck_local_variable_declaration(
             }
         }
         Some(StorageClass::Static) => {
+            // The book advises not to call typecheck_exp on static initialisers - page 258.
             // Static variables have no linkage, and must have an initialiser otherwise zero.
             let initial_value = match &decl.init {
                 Some(Expression::Constant(Const::ConstInt(i))) => {
@@ -324,11 +325,15 @@ fn typecheck_statement(
 ) -> Result<TypedStatement, Error> {
     Ok(match statement {
         Statement::Return(exp) => {
-            let fun_return_type = symbol_table
+            let enclosing_func = symbol_table
                 .get(fun_name)
                 .ok_or_else(|| Error::UndeclaredFunction(fun_name.clone()))?;
+            let fun_return_type = match &enclosing_func.type_ {
+                Type::Function { ret, .. } => ret,
+                _ => panic!("Enclosing function should have function type"),
+            };
             let typed_exp = typecheck_exp(exp, symbol_table)?;
-            let converted_type = convert_to(typed_exp, &fun_return_type.type_);
+            let converted_type = convert_to(typed_exp, fun_return_type);
             TypedStatement::Return(converted_type)
         }
         Statement::Expression(exp) => TypedStatement::Expression(typecheck_exp(exp, symbol_table)?),
@@ -354,9 +359,12 @@ fn typecheck_statement(
                 else_block: typed_else,
             }
         }
-        Statement::Labeled { statement, .. } => {
+        Statement::Labeled { label, statement } => {
             // Labels are not checked here, they are checked in goto_label_resolution
-            typecheck_statement(statement, fun_name, symbol_table)?
+            TypedStatement::Labeled {
+                label: label.clone(),
+                statement: typecheck_statement(statement, fun_name, symbol_table)?.into(),
+            }
         }
         Statement::Goto(statement) => {
             // Goto labels are checked in goto_label_resolution
@@ -648,11 +656,12 @@ fn typecheck_function_call(
     args: &[Expression],
     symbol_table: &SymbolTable,
 ) -> Result<TypedExpression, Error> {
-    let f_type = symbol_table
+    let f_type = &symbol_table
         .get(name)
-        .ok_or_else(|| Error::UndeclaredFunction(name.clone()))?;
-    match &f_type.type_ {
-        Type::Function { params, .. } => {
+        .ok_or_else(|| Error::UndeclaredFunction(name.clone()))?
+        .type_;
+    match f_type {
+        Type::Function { params, ret } => {
             if params.len() != args.len() {
                 return Err(Error::MismatchedFunctionArguments(name.clone()));
             }
@@ -667,7 +676,7 @@ fn typecheck_function_call(
                 .collect::<Result<Vec<_>, _>>()?;
 
             Ok(TypedExpression(
-                f_type.type_.clone(),
+                *ret.clone(),
                 InnerTypedExpression::FunctionCall(name.clone(), converted_args),
             ))
         }
@@ -729,7 +738,46 @@ mod tests {
     }
 
     #[test]
+    fn test_long_int_constant_100() {
+        // Convert a literal ConstLong to ConstInt storage.
+        //   static int i = 100L;
+        // should result in an IntInit(100)
+
+        let mut symbol_table = SymbolTable::new();
+        let var_decl = VarDecl {
+            name: Identifier::from("i"),
+            var_type: Type::Int,
+            init: Some(Expression::Constant(Const::ConstLong(100))),
+            storage_class: Some(StorageClass::Static),
+        };
+
+        let typed_var_decl =
+            typecheck_file_scope_variable_declaration(&var_decl, &mut symbol_table);
+
+        assert_eq!(
+            typed_var_decl,
+            Ok(TypedVarDecl {
+                name: Identifier::from("i"),
+                init: None, // dropped
+                var_type: Type::Int,
+                storage_class: Some(StorageClass::Static),
+            }),
+        );
+        assert_eq!(
+            symbol_table.get(&Identifier::from("i")),
+            Some(&SymbolTableEntry {
+                type_: Type::Int,
+                attrs: IdentifierAttrs::Static {
+                    init: InitialValue::Initial(StaticInit::IntInit(100)),
+                    global: false
+                }
+            })
+        );
+    }
+
+    #[test]
     fn test_long_int_constant() {
+        // Convert a literal ConstLong to ConstInt storage.
         // Implementation-defined behaviour:
         //   static int i = 2147483650L;
         // should result in an IntInit(-2147483646)

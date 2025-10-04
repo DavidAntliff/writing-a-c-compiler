@@ -158,7 +158,7 @@ fn compile_assembly(
     }
 
     log::info!("Semantic analysis");
-    let (typed_ast, symbol_table) = semantics::analyse(&mut ast)?;
+    let (typed_ast, mut symbol_table) = semantics::analyse(&mut ast)?;
 
     //log::debug!("Semantics AST: {ast:#?}");
 
@@ -172,7 +172,7 @@ fn compile_assembly(
         });
     }
 
-    let tacky = tacky::emit_program(&typed_ast, &symbol_table)?;
+    let tacky = tacky::emit_program(&typed_ast, &mut symbol_table)?;
 
     //log::debug!("TACKY: {tacky:#?}");
 
