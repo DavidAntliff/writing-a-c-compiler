@@ -2,14 +2,16 @@
 //!
 //! ASDL:
 //!   program = Program(top_level*)
+//!   assembly_type = Longword | Quadword
 //!   top_level = Function(identifier name, bool global, instruction* instructions)
 //!               | StaticVariable(identifier name, bool global, int init)
-//!   instruction = Mov(operand src, operand dst)
-//!               | Unary(unary_operator, operand)
-//!               | Binary(binary_operator, operand, operand)
-//!               | Cmp(operand, operand)
-//!               | Idiv(operand)
-//!               | Cdq
+//!   instruction = Mov(assembly_type, operand src, operand dst)
+//!               | Movsx(operand src, operand dst)
+//!               | Unary(unary_operator, assembly_type, operand)
+//!               | Binary(binary_operator, assembly_type, operand, operand)
+//!               | Cmp(assembly_type, operand, operand)
+//!               | Idiv(assembly_type, operand)
+//!               | Cdq(assembly_type)
 //!               | Jmp(identifier)
 //!               | JmpCC(cond_code, identifier)
 //!               | SetCC(cond_code, operand)
@@ -27,7 +29,7 @@
 //!           | Stack(int)
 //!           | Data(identifier)
 //!   cond_code = E | NE | L | LE | G | GE
-//!   reg = AX | CX | DX | DI | SI | R8 | R9 | R10 | R11
+//!   reg = AX | CX | DX | DI | SI | R8 | R9 | R10 | R11 | SP
 //!
 //!
 //! Register Usage:
